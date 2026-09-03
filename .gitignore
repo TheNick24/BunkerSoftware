@@ -1,0 +1,4 @@
+# IntelliJ / IDE
+.idea/
+*.iml
+.idea/git_toolbox_prj.xml
