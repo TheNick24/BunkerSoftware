@@ -6,6 +6,11 @@
 
 local args = { ... }
 
+-- ============ LIB ============
+local dir = fs.getDir(shell.getRunningProgram())
+package.path = fs.combine(dir, "?.lua") .. ";" .. package.path
+local bunkerlib = require("bunkerlib")
+
 -- ============ SHA-256 ============
 local band = bit32.band
 local bxor = bit32.bxor
@@ -71,22 +76,27 @@ end
 -- ============ CONFIG ============
 local HASH_FILE = "bunker.hash"
 local UPDATE_INTERVAL = 2
--- Monitor for Room Light Status and Control (main control room display)
-local CONTROL_MONITOR = "monitor_4"
--- Monitor for special lights (corridor lamps etc.)
-local AUX_MONITOR = "monitor_7"
 
--- Content for the info monitors (later):
--- MONITOR_PANELS = { ["monitor_1"] = "clock", ["monitor_2"] = "sensor" }
-local MONITOR_PANELS = {}
+-- Device groups. Rooms are regular rooms, special groups are NOT part of
+-- a room (corridor lamps, doors, ...). Each entry needs a unique `id`.
 local rooms = {
     { id = "entrance", name = "Entrance" },
     { id = "me",       name = "ME-Core" },
+    { id = "control",  name = "Control-Room" },
 }
 
--- Special lights - NOT part of a room/group, shown on AUX_MONITOR
 local aux = {
     { id = "me-corridor-1", name = "ME Corridor 1" },
+    { id = "control-corridor-1",  name = "CR Corridor 1"}
+}
+
+-- Monitor panels: assign each monitor a device group.
+-- `action` selects the device behavior ("light" = on/off toggle) and must
+-- match the client device's `cmd`. New device types just need a list above
+-- (with unique ids) + one row here.
+local MONITOR_PANELS = {
+    ["monitor_4"] = { title = "ROOM LIGHTS",     action = "light", header = "LIGHT", entries = rooms },
+    ["monitor_7"] = { title = "CORRIDOR LIGHTS", action = "light", header = "LIGHT", entries = aux },
 }
 
 -- ============ HASH ============
@@ -104,15 +114,6 @@ local function saveHash(hash)
     local f = fs.open(HASH_FILE, "w")
     f.write(hash)
     f.close()
-end
-
--- ============ MODEM ============
-local function findModem()
-    for _, side in ipairs(rs.getSides()) do
-        local ok = pcall(rednet.open, side)
-        if ok and rednet.isOpen(side) then return side end
-    end
-    return nil
 end
 
 -- ============ SETUP ============
@@ -174,7 +175,7 @@ local function runControl()
     term.setTextColor(colors.green)
     print("Access granted!")
 
-    local modem = findModem()
+    local modem = bunkerlib.findModem()
     if not modem then
         term.setTextColor(colors.red)
         print("No modem found!")
@@ -188,8 +189,7 @@ local function runControl()
         end
     end
 
-    local buttons = {}
-    local auxButtons = {}
+    local buttons = {} -- buttons[monitorName][y] = device id
     local statuses = {}
 
     term.clear()
@@ -199,128 +199,19 @@ local function runControl()
     term.setTextColor(colors.gray)
     print("Commands: s=status  exit=exit")
 
-    local function drawHeader(mon)
-        local w = mon.getSize()
-        mon.setBackgroundColor(colors.black)
-        mon.clear()
-        local title = "MAMDANI OS"
-        mon.setCursorPos(math.max(1, math.floor((w - #title) / 2) + 1), 1)
-        mon.setTextColor(colors.cyan)
-        mon.write(title)
-        mon.setCursorPos(1, 2)
-        mon.setTextColor(colors.yellow)
-        mon.write(string.rep("=", w))
-    end
-
-    local function drawStatusTable(mon, entries, btns, showButtons)
-        local w = mon.getSize()
-        local lightX = math.floor(w * 0.45)
-        local btnX = w - 11
-        local narrow = w < 24
-
-        mon.setCursorPos(1, 4)
-        mon.setTextColor(colors.yellow)
-        mon.write(string.format("%-11s %s", "NAME", "LIGHT"))
-        mon.setCursorPos(1, 5)
-        mon.setTextColor(colors.gray)
-        mon.write(string.rep("-", w))
-
-        local clientCount = 0
-        for i, entry in ipairs(entries) do
-            local y = 5 + i
-            local status = statuses[entry.id]
-            local online = status ~= nil
-
-            mon.setCursorPos(1, y)
-            mon.setTextColor(colors.white)
-            mon.write(entry.name)
-
-            mon.setCursorPos(lightX, y)
-            if online then
-                clientCount = clientCount + 1
-                if status.light then
-                    mon.setTextColor(colors.yellow)
-                    mon.write(narrow and "ON " or "ON")
-                else
-                    mon.setTextColor(colors.gray)
-                    mon.write(narrow and "OFF" or "OFF")
-                end
-            else
-                mon.setTextColor(colors.red)
-                mon.write("OFFLINE")
-            end
-
-            if showButtons then
-                mon.setCursorPos(btnX, y)
-                if online and status.light then
-                    mon.setBackgroundColor(colors.green)
-                else
-                    mon.setBackgroundColor(colors.lightGray)
-                end
-                mon.setTextColor(colors.black)
-                mon.write("[ TOGGLE ]")
-                mon.setBackgroundColor(colors.black)
-                btns[y] = entry.id
-            end
-        end
-
-        return clientCount
-    end
-
-    local function drawInfoPlaceholder(mon)
-        local w = mon.getSize()
-        local inner = math.max(8, w - 6)
-        mon.setCursorPos(2, 4)
-        mon.setTextColor(colors.gray)
-        mon.write("|" .. string.rep("=", inner) .. "|")
-        mon.setCursorPos(2, 5)
-        mon.write("|" .. string.rep(" ", inner) .. "|")
-        mon.setCursorPos(3, 5)
-        mon.setTextColor(colors.yellow)
-        mon.write("INFO PANEL")
-        mon.setCursorPos(2, 6)
-        mon.setTextColor(colors.gray)
-        mon.write("|" .. string.rep(" ", inner) .. "|")
-        mon.setCursorPos(3, 6)
-        mon.write("No content assigned yet.")
-        mon.setCursorPos(2, 7)
-        mon.write("|" .. string.rep(" ", inner) .. "|")
-        mon.setCursorPos(3, 7)
-        mon.write("Config: MONITOR_PANELS")
-        mon.setCursorPos(2, 8)
-        mon.write("|" .. string.rep("=", inner) .. "|")
-    end
-
-    local function drawFooter(mon, label, extra)
-        local w = mon.getSize()
-        local footerY = 5 + #rooms + 2
-        mon.setCursorPos(1, footerY)
-        mon.setTextColor(colors.yellow)
-        mon.write(string.rep("=", w))
-        mon.setCursorPos(1, footerY + 1)
-        mon.setTextColor(colors.gray)
-        mon.write(label)
-        if extra then
-            mon.setCursorPos(w - #extra, footerY + 1)
-            mon.setTextColor(colors.cyan)
-            mon.write(extra)
-        end
-    end
-
     local function drawMonitors()
         buttons = {}
-        auxButtons = {}
         for _, mon in ipairs(monitors) do
-            drawHeader(mon.mon)
-            if mon.name == CONTROL_MONITOR then
-                local n = drawStatusTable(mon.mon, rooms, buttons, true)
-                drawFooter(mon.mon, "ROOM LIGHTS", "CLIENTS: " .. n .. "/" .. #rooms)
-            elseif mon.name == AUX_MONITOR then
-                local n = drawStatusTable(mon.mon, aux, auxButtons, true)
-                drawFooter(mon.mon, "CORRIDOR LIGHTS", "CLIENTS: " .. n .. "/" .. #aux)
+            local panel = MONITOR_PANELS[mon.name]
+            bunkerlib.drawHeader(mon.mon)
+            if panel and #panel.entries > 0 then
+                local btns = {}
+                buttons[mon.name] = btns
+                local n = bunkerlib.drawPanel(mon.mon, panel, statuses, btns, true)
+                bunkerlib.drawFooter(mon.mon, #panel.entries, panel.title, "CLIENTS: " .. n .. "/" .. #panel.entries)
             else
-                drawInfoPlaceholder(mon.mon)
-                drawFooter(mon.mon, "INFO DISPLAY")
+                bunkerlib.drawInfoPlaceholder(mon.mon)
+                bunkerlib.drawFooter(mon.mon, 3, "INFO DISPLAY")
             end
         end
     end
@@ -335,42 +226,34 @@ local function runControl()
             drawMonitors()
             updateTimer = os.startTimer(UPDATE_INTERVAL)
         elseif event == "monitor_touch" then
-            if p1 == CONTROL_MONITOR and buttons[p3] then
-                local roomId = buttons[p3]
-                local status = statuses[roomId]
-                if status then
-                    rednet.send(status.senderId, { room = roomId, cmd = "light", state = not status.light }, "bunker_cmd")
-                end
-            elseif p1 == AUX_MONITOR and auxButtons[p3] then
-                local auxId = auxButtons[p3]
-                local status = statuses[auxId]
-                if status then
-                    rednet.send(status.senderId, { room = auxId, cmd = "light", state = not status.light }, "bunker_cmd")
+            local btns = buttons[p1]
+            if btns and btns[p3] then
+                local id = btns[p3]
+                local status = statuses[id]
+                local panel = MONITOR_PANELS[p1]
+                if status and panel then
+                    local action = bunkerlib.ACTIONS[panel.action or "light"]
+                    if action then
+                        local msg = action(status, id)
+                        rednet.send(status.senderId, msg, "bunker_cmd")
+                    end
                 end
             end
         elseif event == "rednet_message" then
             local senderId, message, protocol = p1, p2, p3
             if protocol == "bunker_status" and type(message) == "table" and message.id then
-                statuses[message.id] = {
-                    light = message.light,
-                    senderId = senderId,
-                    lastSeen = os.clock(),
-                }
+                bunkerlib.setStatus(statuses, message.id, senderId, message.state)
                 drawMonitors()
             end
         elseif event == "char" then
             if p1:lower() == "s" then
                 for id, s in pairs(statuses) do
-                    print(id .. ": " .. (s.light and "LIGHT ON" or "LIGHT OFF"))
+                    print(id .. ": " .. (s.state and "STATE ON" or "STATE OFF"))
                 end
             end
         end
 
-        for id, s in pairs(statuses) do
-            if os.clock() - s.lastSeen > 10 then
-                statuses[id] = nil
-            end
-        end
+        bunkerlib.cleanStatuses(statuses, 10)
     end
 end
 
