@@ -90,6 +90,11 @@ local aux = {
     { id = "control-corridor-1",  name = "CR Corridor 1"}
 }
 
+-- Doors. Same pattern as the light groups.
+local doors = {
+    { id = "control-door", name = "Control Door" },
+}
+
 -- Monitor panels: assign each monitor a device group.
 -- `action` selects the device behavior ("light" = on/off toggle) and must
 -- match the client device's `cmd`. New device types just need a list above
@@ -97,6 +102,8 @@ local aux = {
 local MONITOR_PANELS = {
     ["monitor_4"] = { title = "ROOM LIGHTS",     action = "light", header = "LIGHT", entries = rooms },
     ["monitor_7"] = { title = "CORRIDOR LIGHTS", action = "light", header = "LIGHT", entries = aux },
+    ["monitor_3"] = { title = "DOOR",            action = "door", header = "DOOR",
+                      onText = "OPEN", offText = "CLOSED", entries = doors },
 }
 
 -- ============ HASH ============

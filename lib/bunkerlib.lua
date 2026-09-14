@@ -38,6 +38,69 @@ function bunkerlib.printOnce(cache, key, txt)
     end
 end
 
+-- ============ SHA-256 ============
+local band    = bit32.band
+local bxor    = bit32.bxor
+local rrotate = bit32.rrotate
+local rshift  = bit32.rshift
+
+local SHA256_K = {
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+}
+
+function bunkerlib.sha256(msg)
+    local len = #msg * 8
+    msg = msg .. "\128"
+    while #msg % 64 ~= 56 do msg = msg .. "\0" end
+    local h32 = math.floor(len / 4294967296)
+    local l32 = len % 4294967296
+    msg = msg .. string.char(
+        0, 0, 0, 0,
+        math.floor(h32 / 16777216) % 256, math.floor(h32 / 65536) % 256,
+        math.floor(h32 / 256) % 256, h32 % 256,
+        math.floor(l32 / 16777216) % 256, math.floor(l32 / 65536) % 256,
+        math.floor(l32 / 256) % 256, l32 % 256
+    )
+    local H = { 0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+                0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19 }
+    for chunk = 0, #msg - 1, 64 do
+        local W = {}
+        for t = 0, 15 do
+            local o = chunk + t * 4
+            W[t] = (string.byte(msg,o+1) or 0) * 16777216
+                 + (string.byte(msg,o+2) or 0) * 65536
+                 + (string.byte(msg,o+3) or 0) * 256
+                 + (string.byte(msg,o+4) or 0)
+        end
+        for t = 16, 63 do
+            local s0 = bxor(rrotate(W[t-15],7), rrotate(W[t-15],18), rshift(W[t-15],3))
+            local s1 = bxor(rrotate(W[t-2],17), rrotate(W[t-2],19), rshift(W[t-2],10))
+            W[t] = band(W[t-16] + s0 + W[t-7] + s1)
+        end
+        local a,b,c,d,e,f,g,h = H[1],H[2],H[3],H[4],H[5],H[6],H[7],H[8]
+        for t = 0, 63 do
+            local S1 = bxor(rrotate(e,6), rrotate(e,11), rrotate(e,25))
+            local ch = band(e,f) + band(bxor(e,0xFFFFFFFF),g)
+            local t1 = band(h + S1 + ch + SHA256_K[t+1] + W[t])
+            local S0 = bxor(rrotate(a,2), rrotate(a,13), rrotate(a,22))
+            local maj = band(a,b) + band(a,c) + band(b,c)
+            local t2 = band(S0 + maj)
+            h=g; g=f; f=e; e=band(d+t1); d=c; c=b; b=a; a=band(t1+t2)
+        end
+        H[1]=band(H[1]+a); H[2]=band(H[2]+b); H[3]=band(H[3]+c); H[4]=band(H[4]+d)
+        H[5]=band(H[5]+e); H[6]=band(H[6]+f); H[7]=band(H[7]+g); H[8]=band(H[8]+h)
+    end
+    return string.format("%08x%08x%08x%08x%08x%08x%08x%08x",
+        H[1],H[2],H[3],H[4],H[5],H[6],H[7],H[8])
+end
+
 -- ============ RELAY (protected accesses) ============
 function bunkerlib.relayGet(relay, side, onError)
     local ok, res = pcall(peripheral.call, relay, "getOutput", side)
@@ -157,6 +220,23 @@ bunkerlib.DRIVERS = {
             rs.setOutput(dev.side, state)
         end,
     },
+
+    -- Door controlled through a redstone link bridge / contact peripheral
+    -- (e.g. redstone_link_bridge_1) on the given side.
+    -- A redstone signal ON means the door is CLOSED, so the state is
+    -- inverted: state true = OPEN, false = CLOSED.
+    door = {
+        name = "door",
+        describe = function(dev)
+            return (dev.peripheral or "?") .. " [" .. (dev.side or "?") .. "]"
+        end,
+        read = function(dev)
+            return not peripheral.call(dev.peripheral, "getOutput", dev.side)
+        end,
+        set = function(dev, state)
+            peripheral.call(dev.peripheral, "setOutput", dev.side, not state)
+        end,
+    },
 }
 
 function bunkerlib.driver(name)
@@ -172,16 +252,23 @@ bunkerlib.ACTIONS = {
     light = function(status, id)
         return { room = id, cmd = "light", state = not status.state }
     end,
+    -- Door: open/close toggle (controllable).
+    door = function(status, id)
+        return { room = id, cmd = "door", state = not status.state }
+    end,
 }
 
 -- ============ MONITOR PANELS ============
 
 -- Draws a device group with ON/OFF state + click buttons.
 -- `btns[y]` gets the device id for every drawn row.
--- State is right-aligned (ends right before the button), so long room
--- names do not collide with it.
+-- The state column is pushed right, sitting flush left of the button, so
+-- the names get the whole remaining width. Header and state texts are
+-- centered within that column.
 -- opts: { button = label shown in each row (default "[CLICK]"),
---         header = state column title (default "STATE") }
+--         header = state column title (default "STATE"),
+--         onText / offText = texts for state true/false
+--                            (default "ON" / "OFF") }
 -- Returns the number of online devices.
 function bunkerlib.drawToggleTable(mon, entries, statuses, btns, showButtons, opts)
     opts = opts or {}
@@ -190,16 +277,21 @@ function bunkerlib.drawToggleTable(mon, entries, statuses, btns, showButtons, op
     local btnW = #label
     local btnX = w - btnW + 1         -- button at the far right edge
     local header = opts.header or "STATE"
-    -- the state column is pushed right, sitting flush left of the button,
-    -- so the names get the whole remaining width
-    local headerX = btnX - #header -- header starts directly left of the button
-    local stateRight = headerX + #header - 1
-    local maxName = math.max(3, headerX - 2)
+    local onText = opts.onText or "ON"
+    local offText = opts.offText or "OFF"
+    -- column width fits header + both state texts + "OFFLINE"
+    local stateW = math.max(#header, #onText, #offText, #"OFFLINE")
+    local zoneRight = btnX - 1
+    local zoneLeft = zoneRight - stateW + 1
+    local centerX = function(len)
+        return zoneLeft + math.floor((stateW - len) / 2)
+    end
+    local maxName = math.max(3, zoneLeft - 2)
 
     mon.setCursorPos(1, 4)
     mon.setTextColor(colors.yellow)
     mon.write("NAME")
-    mon.setCursorPos(headerX, 4)
+    mon.setCursorPos(centerX(#header), 4)
     mon.write(header)
     mon.setCursorPos(1, 5)
     mon.setTextColor(colors.gray)
@@ -221,9 +313,8 @@ function bunkerlib.drawToggleTable(mon, entries, statuses, btns, showButtons, op
 
         if online then
             clientCount = clientCount + 1
-            local txt = status.state and "ON" or "OFF"
-            -- centered under the state column header (e.g. "LIGHT")
-            mon.setCursorPos(headerX + math.floor((#header - #txt) / 2), y)
+            local txt = status.state and onText or offText
+            mon.setCursorPos(centerX(#txt), y)
             if status.state then
                 mon.setTextColor(colors.yellow)
             else
@@ -231,7 +322,7 @@ function bunkerlib.drawToggleTable(mon, entries, statuses, btns, showButtons, op
             end
             mon.write(txt)
         else
-            mon.setCursorPos(stateRight - 7 + 1, y)
+            mon.setCursorPos(zoneRight - 7 + 1, y)
             mon.setTextColor(colors.red)
             mon.write("OFFLINE")
         end
@@ -255,11 +346,14 @@ end
 
 -- Draws a monitor panel (its configured device group).
 -- panel: { title, action = "light", entries = { {id,name}, ... },
---          button = optional button label, header = optional column title }
+--          button = optional button label, header = optional column title,
+--          onText / offText = optional state texts }
 function bunkerlib.drawPanel(mon, panel, statuses, btns, showButtons)
     return bunkerlib.drawToggleTable(mon, panel.entries, statuses, btns, showButtons, {
         button = panel.button,
         header = panel.header,
+        onText = panel.onText,
+        offText = panel.offText,
     })
 end
 
@@ -354,6 +448,10 @@ function bunkerlib.runClient(conf)
                     end
                 end
             end
+        end
+        -- optional custom event handler (e.g. for keypad monitors)
+        if conf.onEvent then
+            pcall(conf.onEvent, event, p1, p2, p3)
         end
     end
 end
