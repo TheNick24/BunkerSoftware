@@ -95,15 +95,25 @@ local doors = {
     { id = "control-door", name = "Control Door" },
 }
 
--- Monitor panels: assign each monitor a device group.
--- `action` selects the device behavior ("light" = on/off toggle) and must
+-- Safety doors: binary doors that can only be OPEN or CLOSED.
+-- Same pattern as the doors, but their own group/action.
+local safetyDoors = {
+    { id = "me-safety-1",          name = "ME Safety Door" },
+    { id = "distributor-safety-1", name = "Distributor Safety Door" },
+}
+
+-- Monitor panels: assign each monitor a device group (or `sections` to show
+-- several groups on one monitor). `action` selects the device behavior
+-- ("light" = on/off toggle, "door"/"safety-door" = open/close) and must
 -- match the client device's `cmd`. New device types just need a list above
 -- (with unique ids) + one row here.
 local MONITOR_PANELS = {
     ["monitor_4"] = { title = "ROOM LIGHTS",     action = "light", header = "LIGHT", entries = rooms },
     ["monitor_7"] = { title = "CORRIDOR LIGHTS", action = "light", header = "LIGHT", entries = aux },
-    ["monitor_3"] = { title = "DOOR",            action = "door", header = "DOOR",
-                      onText = "OPEN", offText = "CLOSED", entries = doors },
+    ["monitor_3"] = { title = "DOORS", sections = {
+        { title = "DOOR",         action = "door",        onText = "OPEN", offText = "CLOSED", entries = doors },
+        { title = "SAFETY DOORS", action = "safety-door", onText = "OPEN", offText = "CLOSED", entries = safetyDoors },
+    } },
 }
 
 -- ============ HASH ============
@@ -196,7 +206,7 @@ local function runControl()
         end
     end
 
-    local buttons = {} -- buttons[monitorName][y] = device id
+    local buttons = {} -- buttons[monitorName][y] = { id, action }
     local statuses = {}
 
     term.clear()
@@ -206,16 +216,26 @@ local function runControl()
     term.setTextColor(colors.gray)
     print("Commands: s=status  exit=exit")
 
+    local function countEntries(panel)
+        if panel.sections then
+            local n = 0
+            for _, s in ipairs(panel.sections) do n = n + #s.entries end
+            return n
+        end
+        return #panel.entries
+    end
+
     local function drawMonitors()
         buttons = {}
         for _, mon in ipairs(monitors) do
             local panel = MONITOR_PANELS[mon.name]
             bunkerlib.drawHeader(mon.mon)
-            if panel and #panel.entries > 0 then
+            if panel and countEntries(panel) > 0 then
                 local btns = {}
                 buttons[mon.name] = btns
-                local n = bunkerlib.drawPanel(mon.mon, panel, statuses, btns, true)
-                bunkerlib.drawFooter(mon.mon, #panel.entries, panel.title, "CLIENTS: " .. n .. "/" .. #panel.entries)
+                local n, lastRow = bunkerlib.drawPanel(mon.mon, panel, statuses, btns, true)
+                local total = countEntries(panel)
+                bunkerlib.drawFooter(mon.mon, lastRow - 5, panel.title, "CLIENTS: " .. n .. "/" .. total)
             else
                 bunkerlib.drawInfoPlaceholder(mon.mon)
                 bunkerlib.drawFooter(mon.mon, 3, "INFO DISPLAY")
@@ -235,13 +255,13 @@ local function runControl()
         elseif event == "monitor_touch" then
             local btns = buttons[p1]
             if btns and btns[p3] then
-                local id = btns[p3]
-                local status = statuses[id]
-                local panel = MONITOR_PANELS[p1]
-                if status and panel then
-                    local action = bunkerlib.ACTIONS[panel.action or "light"]
+                local btn = btns[p3]
+                local status = statuses[btn.id]
+                if status then
+                    local panel = MONITOR_PANELS[p1]
+                    local action = panel and bunkerlib.ACTIONS[btn.action or "light"]
                     if action then
-                        local msg = action(status, id)
+                        local msg = action(status, btn.id)
                         rednet.send(status.senderId, msg, "bunker_cmd")
                     end
                 end

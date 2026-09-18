@@ -9,6 +9,8 @@ Custom operating system / control system for a bunker network in ComputerCraft.
 - `client/entrance/startup.lua` - Room client (Entrance) - device control, rednet status
 - `client/meroom/startup.lua` - Room client (ME-Core) - device control, rednet status
 - `client/control/startup.lua` - Client for the control room computer (its own devices)
+- `client/distributor1/startup.lua` - Room client (Distributor_1) - device control, rednet status
+- `remote/startup.lua` - Remote CLI (e.g. pocket computer) - list/control devices from the shell
 
 ## Requirements
 
@@ -24,12 +26,12 @@ A **device** is just { `id`, `cmd`, `driver`, ... }. Two independent concepts:
   - `"relay"` - through a redstone relay peripheral (`relay` + `side`)
   - `"redstone"` - directly on a computer redstone output (only `side`)
   - New transports (other peripherals) are added in `bunkerlib.DRIVERS`.
-- **`action` / `cmd`** : *WHAT* the device is (light, door, ...) and which
-  command toggles it. The control panel's `action` must match the client
+- **`action` / `cmd`** : *WHAT* the device is (light, door, safety-door, ...) and
+  which command toggles it. The control panel's `action` must match the client
   device's `cmd`. New behaviors are added in `bunkerlib.ACTIONS`.
 
-Patch protocol: clients broadcast `{ id, state }` on `bunker_status`;
-the control sends `{ room, cmd, state }` on `bunker_cmd`.
+Patch protocol: clients broadcast `{ id, cmd, state }` on `bunker_status`;
+the control (or any remote) sends `{ room, cmd, state }` on `bunker_cmd`.
 
 ## Setup
 
@@ -43,11 +45,17 @@ the control sends `{ room, cmd, state }` on `bunker_cmd`.
 3. Adjust the config:
    - `rooms` table (room device IDs + names)
    - `aux` table for special devices (e.g. corridor lamps) - NOT part of a room
-   - `MONITOR_PANELS` assigns each monitor a device group:
+- `MONITOR_PANELS` assigns each monitor a device group - one entry per
+     device list (`rooms`, `aux`, `doors`, `safetyDoors`, ...). A single
+     monitor can show several groups via `sections`:
      ```
      local MONITOR_PANELS = {
          ["monitor_4"] = { title = "ROOM LIGHTS",     action = "light", header = "LIGHT", entries = rooms },
          ["monitor_7"] = { title = "CORRIDOR LIGHTS", action = "light", header = "LIGHT", entries = aux   },
+         ["monitor_3"] = { title = "DOORS", sections = {
+             { title = "DOOR",         action = "door",        onText = "OPEN", offText = "CLOSED", entries = doors },
+             { title = "SAFETY DOORS", action = "safety-door", onText = "OPEN", offText = "CLOSED", entries = safetyDoors },
+         } },
      }
      ```
      `action` must match the client `cmd`. `header` is the state column
@@ -72,8 +80,9 @@ the control sends `{ room, cmd, state }` on `bunker_cmd`.
          { id = "me",      cmd = "light", driver = "relay",    relay = "redstone_relay_7", side = "top"   },
          -- corridor lamps through a relay
          { id = "corr-1",  cmd = "light", driver = "relay",    relay = "redstone_relay_7", side = "right" },
-         -- a door directly on a redstone output (no relay)
-         { id = "door1",   cmd = "light", driver = "redstone", side = "front" },
+         -- safety door through a door contact/link bridge (signal ON = closed,
+         -- so "door" inverts the state; sync the `id` with `safetyDoors`)
+         { id = "me-safety-1", cmd = "safety-door", driver = "door", peripheral = "redstone_relay_11", side = "left" },
      }
      ```
      `id` must match a control panel entry, `cmd` the panel's `action`.
@@ -96,9 +105,27 @@ run `control setup` in the control room.
 - Only monitors listed in `MONITOR_PANELS` with entries are interactive
 - Terminal: `s` = status, `exit` = quit
 
+## Remote CLI (pocket computer / any computer with a modem)
+
+Copy `remote/startup.lua` as `remote.lua` (next to `bunkerlib.lua`); enable
+the wireless modem (pocket GUI) and run:
+
+```
+remote               list all devices heard in the last 4s
+remote <id> on|off   set a device explicitly
+remote <id> toggle   flip a device
+remote <id>          shorthand for toggle
+```
+
+Devices are discovered live from the clients' `bunker_status` broadcasts,
+which also carry each device's `cmd` type (light / door / safety-door), so
+the CLI shows the correct state texts (ON/OFF vs OPEN/CLOSED) and sends the
+right command to the right client.
+
 ## Add a new device type
 
-1. Control: add the device to a list + one row in `MONITOR_PANELS`
+1. Control: add the device to a list (`rooms`, `aux`, `doors`, `safetyDoors`, ...)
+   + one row in `MONITOR_PANELS` (or a section on an existing panel)
 2. Client: add the device to `DEVICES` with a matching `cmd`
 3. New transport (how it is driven): add a driver in `bunkerlib.DRIVERS`
 4. New behavior (what a button does): add an action in `bunkerlib.ACTIONS`

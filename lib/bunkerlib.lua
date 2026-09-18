@@ -256,23 +256,32 @@ bunkerlib.ACTIONS = {
     door = function(status, id)
         return { room = id, cmd = "door", state = not status.state }
     end,
+    -- Safety door: binary open/closed door (can only be ON or OFF).
+    -- Same toggle behavior as "door", but a separate type/group.
+    ["safety-door"] = function(status, id)
+        return { room = id, cmd = "safety-door", state = not status.state }
+    end,
 }
 
 -- ============ MONITOR PANELS ============
 
 -- Draws a device group with ON/OFF state + click buttons.
--- `btns[y]` gets the device id for every drawn row.
+-- `btns[y]` gets { id = device id, action = action name } for every drawn row.
 -- The state column is pushed right, sitting flush left of the button, so
 -- the names get the whole remaining width. Header and state texts are
 -- centered within that column.
--- opts: { button = label shown in each row (default "[CLICK]"),
+-- opts: { action = action name for the row buttons (default "light"),
+--         button = label shown in each row (default "[CLICK]"),
 --         header = state column title (default "STATE"),
 --         onText / offText = texts for state true/false
---                            (default "ON" / "OFF") }
+--                           (default "ON" / "OFF") }
+-- startRow: row where the header is drawn (default 4).
 -- Returns the number of online devices.
-function bunkerlib.drawToggleTable(mon, entries, statuses, btns, showButtons, opts)
+function bunkerlib.drawToggleTable(mon, entries, statuses, btns, showButtons, opts, startRow)
     opts = opts or {}
+    startRow = startRow or 4
     local w = mon.getSize()
+    local action = opts.action or "light"
     local label = opts.button or "[CLICK]"
     local btnW = #label
     local btnX = w - btnW + 1         -- button at the far right edge
@@ -288,18 +297,18 @@ function bunkerlib.drawToggleTable(mon, entries, statuses, btns, showButtons, op
     end
     local maxName = math.max(3, zoneLeft - 2)
 
-    mon.setCursorPos(1, 4)
+    mon.setCursorPos(1, startRow)
     mon.setTextColor(colors.yellow)
     mon.write("NAME")
-    mon.setCursorPos(centerX(#header), 4)
+    mon.setCursorPos(centerX(#header), startRow)
     mon.write(header)
-    mon.setCursorPos(1, 5)
+    mon.setCursorPos(1, startRow + 1)
     mon.setTextColor(colors.gray)
     mon.write(string.rep("-", w))
 
     local clientCount = 0
     for i, entry in ipairs(entries) do
-        local y = 5 + i
+        local y = startRow + 1 + i
         local status = statuses[entry.id]
         local online = status ~= nil
 
@@ -337,24 +346,53 @@ function bunkerlib.drawToggleTable(mon, entries, statuses, btns, showButtons, op
             mon.setTextColor(colors.black)
             mon.write(label)
             mon.setBackgroundColor(colors.black)
-            btns[y] = entry.id
+            btns[y] = { id = entry.id, action = action }
         end
     end
 
     return clientCount
 end
 
--- Draws a monitor panel (its configured device group).
--- panel: { title, action = "light", entries = { {id,name}, ... },
---          button = optional button label, header = optional column title,
---          onText / offText = optional state texts }
+-- Draws a monitor panel. A panel can be either a single device group
+-- (as before) or multiple groups/sections, so one monitor can show
+-- several device types (e.g. doors + safety doors):
+--   panel: { title, action = "light", entries = { {id,name}, ... },
+--            button = optional button label, header = optional column title,
+--            onText / offText = optional state texts }
+--   OR
+--   panel: { title, sections = {
+--            { title, action, button?, header?, onText?, offText?, entries },
+--            ... } }
+-- Returns the number of online devices and the last used row.
 function bunkerlib.drawPanel(mon, panel, statuses, btns, showButtons)
-    return bunkerlib.drawToggleTable(mon, panel.entries, statuses, btns, showButtons, {
-        button = panel.button,
-        header = panel.header,
-        onText = panel.onText,
+    if panel.sections then
+        local y = 3
+        local clientCount = 0
+        for _, sec in ipairs(panel.sections) do
+            y = y + 1
+            mon.setCursorPos(1, y)
+            mon.setTextColor(colors.cyan)
+            mon.write(sec.title or panel.title or "GROUP")
+            clientCount = clientCount + bunkerlib.drawToggleTable(mon, sec.entries, statuses,
+                btns, showButtons, {
+                    action  = sec.action or panel.action,
+                    button  = sec.button or panel.button,
+                    header  = sec.header,
+                    onText  = sec.onText,
+                    offText = sec.offText,
+                }, y + 1)
+            y = y + 2 + #sec.entries
+        end
+        return clientCount, y
+    end
+    local n = bunkerlib.drawToggleTable(mon, panel.entries, statuses, btns, showButtons, {
+        action  = panel.action,
+        button  = panel.button,
+        header  = panel.header,
+        onText  = panel.onText,
         offText = panel.offText,
     })
+    return n, 5 + #panel.entries
 end
 
 -- ============ CLIENT ============
@@ -404,7 +442,7 @@ function bunkerlib.runClient(conf)
 
     local function sendStatus()
         for _, dev in ipairs(devices) do
-            rednet.broadcast({ id = dev.id, state = read(dev) }, "bunker_status")
+            rednet.broadcast({ id = dev.id, cmd = dev.cmd, state = read(dev) }, "bunker_status")
         end
     end
 

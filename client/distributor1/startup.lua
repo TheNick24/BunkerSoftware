@@ -5,13 +5,13 @@
 -- into the same folder.
 -- ============================================
 
-local dir             = fs.getDir(shell.getRunningProgram())
-package.path          = fs.combine(dir, "?.lua") .. ";" .. package.path
-local bunkerlib       = require("bunkerlib")
+local dir = fs.getDir(shell.getRunningProgram())
+package.path = fs.combine(dir, "?.lua") .. ";" .. package.path
+local bunkerlib = require("bunkerlib")
 
 -- ============ CONFIG (edit here!) ============
-local NAME            = "ME-Core"
-local MODEM_SIDE      = "left" -- e.g. "left"; nil = auto-detect
+local NAME            = "Distributor_1"
+local MODEM_SIDE      = "back" -- e.g. "left"; nil = auto-detect
 local UPDATE_INTERVAL = 2
 
 -- Every device this computer controls.
@@ -21,10 +21,8 @@ local UPDATE_INTERVAL = 2
 --   "door"     -> door contact/link bridge (`peripheral` + `side`, inverted)
 -- `cmd` is the command it reacts to - must match the panel's `action`
 --   in the control room. `id` must match the control panel's entry.
-local DEVICES         = {
-    { id = "me",            cmd = "light",       driver = "relay",    relay = "redstone_relay_7", side = "top" },
-    { id = "me-corridor-1", cmd = "light",       driver = "relay",    relay = "redstone_relay_7", side = "right" },
-    { id = "me-safety-1",   cmd = "safety-door", driver = "door",     peripheral = "redstone_relay_11", side = "front" },
+local DEVICES = {
+    { id = "distributor-safety-1", cmd = "safety-door", driver = "door", peripheral = "redstone_relay_12", side = "front" },
 }
 
 -- ============ START ============
