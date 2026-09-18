@@ -51,11 +51,11 @@ local ROLES = {
 -- IDs on the screens of the running receivers, with `id`, or via
 -- `remote list` (the CLIENT column shows the numeric computer id).
 local TARGETS = {
-    -- [1] = "control",        -- control room (monitors + keypad)
-    -- [2] = "entrance",
-    -- [3] = "meroom",
-    -- [4] = "distributor",
-    -- [5] = "keypad",
+    [12] = "control",        -- control room computer (monitors + keypad screen)
+    [28] = "entrance",       -- Entrance room client
+    [27] = "meroom",         -- ME-Core room client
+    [24] = "distributor",    -- Distributor_1 room client
+    [23] = "remote",         -- pocket computer (remote CLI)
 }
 
 local LAUNCHER = [[
