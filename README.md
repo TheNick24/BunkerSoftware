@@ -201,7 +201,7 @@ them from a single computer over rednet:
    reboots them.
 
 After the first deploy every target boots into a launcher that runs the
-receiver AND the main program together (`parallel.waitForEach`), so future
+receiver AND the main program together (`parallel.waitForAll`), so future
 updates are fully automatic: edit files on the admin computer, run `deploy`,
 done.
 

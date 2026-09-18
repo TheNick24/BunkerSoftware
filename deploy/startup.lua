@@ -63,7 +63,7 @@ local LAUNCHER = [[
 -- Runs the MAIN program together with the deploy receiver, so this
 -- computer can always be updated remotely.
 local arg = { ... }
-parallel.waitForEach(
+parallel.waitForAll(
     function()
         if fs.exists("receiver.lua") then
             shell.run("receiver.lua")
