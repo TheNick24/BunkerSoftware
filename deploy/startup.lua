@@ -14,6 +14,9 @@
 local args = { ... }
 
 local CHUNK_SIZE = 16000
+local MAX_ATTEMPTS = 4 -- resend a file until it is acknowledged
+local ACK_TIMEOUT = 2 -- seconds to wait for the file ack from the target
+local SEND_GAP = 0.05 -- pause between chunks so the modem can keep up
 local REBOOT_AFTER = true -- restart every target after a successful deploy
 
 -- Which files EVERY target gets.
@@ -106,39 +109,85 @@ end
 
 local function sendFile(id, dest, data)
     local total = math.max(1, math.ceil(#data / CHUNK_SIZE))
-    for i = 1, total do
-        local chunk = string.sub(data, (i - 1) * CHUNK_SIZE + 1, i * CHUNK_SIZE)
-        rednet.send(id, { action = "file", file = dest, index = i, total = total, chunk = chunk }, "bunker_deploy")
+    for attempt = 1, MAX_ATTEMPTS do
+        for i = 1, total do
+            local chunk = string.sub(data, (i - 1) * CHUNK_SIZE + 1, i * CHUNK_SIZE)
+            rednet.send(id, { action = "file", file = dest, index = i, total = total, chunk = chunk }, "bunker_deploy")
+            os.sleep(SEND_GAP)
+        end
+        local sender, msg = rednet.receive("bunker_deploy", ACK_TIMEOUT)
+        if sender == id and type(msg) == "table" and msg.action == "ack" and msg.file == dest then
+            return true
+        end
     end
+    return false
+end
+
+local function localWrite(dest, data)
+    -- self-update: copy the file directly on this computer (no network)
+    local d = fs.getDir(dest)
+    if d ~= "" and not fs.exists(d) then
+        fs.makeDir(d)
+    end
+    local f = fs.open(dest, "w")
+    f.write(data)
+    f.close()
 end
 
 local function deployRole(id, role)
     local cfg = ROLES[role]
     if not cfg then
         print("  ! unknown role: " .. role)
-        return
+        return false
     end
-    print("-> computer " .. id .. " (" .. role .. ")")
+    local self = (id == os.getComputerID())
+    print("-> computer " .. id .. " (" .. role .. (self and ", this computer" or "") .. ")")
+    local ok = true
     for _, f in ipairs(SHARED) do
         local data = readFile(f.src)
-        if data then
-            sendFile(id, f.dest, data)
+        if not data then
+            ok = false
+        elseif self then
+            localWrite(f.dest, data)
+            print("   " .. f.dest .. " (local)")
+        elseif sendFile(id, f.dest, data) then
             print("   " .. f.dest .. " (" .. #data .. " b)")
+        else
+            ok = false
+            print("   FAILED: " .. f.dest)
         end
     end
     local data = readFile(cfg.src)
     if data then
-        sendFile(id, cfg.dest, data)
-        print("   " .. cfg.dest .. " (" .. #data .. " b)")
+        if self then
+            localWrite(cfg.dest, data)
+            print("   " .. cfg.dest .. " (local)")
+        elseif sendFile(id, cfg.dest, data) then
+            print("   " .. cfg.dest .. " (" .. #data .. " b)")
+        else
+            ok = false
+            print("   FAILED: " .. cfg.dest)
+        end
+    else
+        ok = false
     end
     if cfg.launcher then
-        sendFile(id, "startup.lua", LAUNCHER)
-        print("   startup.lua (launcher)")
+        if self then
+            localWrite("startup.lua", LAUNCHER)
+            print("   startup.lua (launcher, local)")
+        elseif sendFile(id, "startup.lua", LAUNCHER) then
+            print("   startup.lua (launcher)")
+        else
+            ok = false
+            print("   FAILED: startup.lua (launcher)")
+        end
     end
-    if REBOOT_AFTER and id ~= os.getComputerID() then
+    if ok and REBOOT_AFTER and not self then
         rednet.send(id, { action = "reboot" }, "bunker_deploy")
+        os.sleep(0.5)
         print("   reboot")
     end
+    return ok
 end
 
 local function listTargets()
@@ -176,22 +225,23 @@ end
 print("Modem: " .. modem)
 
 local filter = args[1]
-local deployed = 0
+local updated, failed = 0, 0
 for id, role in pairs(TARGETS) do
     if matchesRole(id, role, filter) then
         if type(role) == "table" then
+            local ok = true
             for _, r in ipairs(role) do
-                deployRole(id, r)
+                if not deployRole(id, r) then ok = false end
             end
+            if ok then updated = updated + 1 else failed = failed + 1 end
         else
-            deployRole(id, role)
+            if deployRole(id, role) then updated = updated + 1 else failed = failed + 1 end
         end
-        deployed = deployed + 1
     end
 end
 
 print("")
-print("Done. Targets updated: " .. deployed)
-if deployed == 0 then
+print("Done. " .. updated .. " ok, " .. failed .. " failed.")
+if updated + failed == 0 then
     print("(no targets matched - run `deploy targets` to check the config)")
 end

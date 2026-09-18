@@ -212,8 +212,9 @@ deploy targets    show the configured targets
 ```
 
 Notes:
-- Files are streamed in 16 KB chunks; a missing chunk just means the file is
-  written once every chunk has arrived.
+- Files are streamed in 16 KB chunks; every file must be acknowledged by
+  the target. A missing or dropped chunk just means the whole file is re-sent
+  (up to 4 attempts), so nothing is written until it arrived completely.
 - `REBOOT_AFTER = true` restarts every target right after the transfer. Set
   it to `false` if a target is in the middle of something.
 - Pocket computers are not auto-deployed (they have no launcher); copy
