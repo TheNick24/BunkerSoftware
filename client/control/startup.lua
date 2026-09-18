@@ -17,7 +17,7 @@ package.path = fs.combine(dir, "?.lua") .. ";" .. package.path
 local bunkerlib = require("bunkerlib")
 
 -- ============ CONFIG ============
-local NAME            = "Control-Room"
+local NAME            = "Control"
 local MODEM_SIDE      = "left"
 local UPDATE_INTERVAL = 2
 local DOOR_TIMEOUT    = 5   -- seconds until door auto-closes

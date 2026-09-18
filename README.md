@@ -13,10 +13,10 @@ Custom operating system / control system for a bunker network in ComputerCraft.
 - `lib/actions.lua` - Generic panel actions (`light`)
 - `lib/monitor.lua` - Monitor rendering (headers, toggle tables, panels, footer)
 - `lib/client.lua` - Room client runtime (`runClient`)
-- `control/startup.lua` - Control room software (monitor UI, password login, rednet)
+- `control/startup.lua` - ControlRoom software (control room computer with the monitor panels)
 - `client/entrance/startup.lua` - Room client (Entrance) - device control, rednet status
 - `client/meroom/startup.lua` - Room client (ME-Core) - device control, rednet status
-- `client/control/startup.lua` - Client for the control room computer (its own devices)
+- `client/control/startup.lua` - Door keypad + client on the separate **Control** computer (door devices + keypad/inside monitors)
 - `client/distributor1/startup.lua` - Room client (Distributor_1) - device control, rednet status
 - `remote/startup.lua` - Remote CLI (e.g. pocket computer) - list/control devices from the shell
 - `deploy/startup.lua` - Deploy tool (push files to every computer over rednet)
@@ -207,7 +207,7 @@ done.
 
 ```
 deploy            deploy to all targets
-deploy <role>     deploy only to the targets of a role (control, entrance, ...)
+deploy <role>     deploy only to the targets of a role (controlroom, control, entrance, ...)
 deploy targets    show the configured targets
 ```
 

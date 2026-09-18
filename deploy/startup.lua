@@ -40,11 +40,14 @@ local SHARED = {
 -- true` additionally writes a startup.lua that starts the receiver together
 -- with the main program, so the target can be updated again after a reboot.
 local ROLES = {
-    control     = { src = "control/startup.lua",            dest = "main.lua", launcher = true },
+    -- ControlRoom (monitor panels + alarm UI, the screens)
+    controlroom = { src = "control/startup.lua",            dest = "main.lua", launcher = true },
     entrance    = { src = "client/entrance/startup.lua",    dest = "main.lua", launcher = true },
     meroom      = { src = "client/meroom/startup.lua",      dest = "main.lua", launcher = true },
     distributor = { src = "client/distributor1/startup.lua", dest = "main.lua", launcher = true },
-    keypad      = { src = "client/control/startup.lua",     dest = "main.lua", launcher = true },
+    -- Control = the separate door-keypad computer (NOT ControlRoom). The
+    -- keypad / inside monitors hang off this computer.
+    control     = { src = "client/control/startup.lua",     dest = "main.lua", launcher = true },
     -- pocket computers: no launcher (interactive tool), the files are pushed
     -- but the pocket keeps running `remote` manually
     remote      = { src = "remote/startup.lua",             dest = "remote.lua", launcher = false },
@@ -54,7 +57,8 @@ local ROLES = {
 -- IDs on the screens of the running receivers, with `id`, or via
 -- `remote list` (the CLIENT column shows the numeric computer id).
 local TARGETS = {
-    [12] = "control",        -- control room computer (monitors + keypad screen)
+    [10] = "controlroom",    -- ControlRoom: the monitor panels + alarm UI
+    [12] = "control",        -- Control: separate door-keypad computer (door + its monitors)
     [28] = "entrance",       -- Entrance room client
     [27] = "meroom",         -- ME-Core room client
     [24] = "distributor",    -- Distributor_1 room client
