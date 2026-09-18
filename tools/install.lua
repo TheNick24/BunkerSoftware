@@ -66,7 +66,8 @@ local function httpGet(url, redirects)
     return nil, "HTTP " .. tostring(code)
 end
 
-local function download(rel)
+local function download(rel, localRel)
+    localRel = localRel or rel
     local url = BASE_URL .. "/" .. rel
     local data, err = httpGet(url)
     if not data then
@@ -75,15 +76,15 @@ local function download(rel)
         term.setTextColor(colors.white)
         return false
     end
-    local dir = fs.getDir(rel)
+    local dir = fs.getDir(localRel)
     if dir ~= "" and dir ~= "." and not fs.exists(dir) then
         fs.makeDir(dir)
     end
-    local f = fs.open(rel, "w")
+    local f = fs.open(localRel, "w")
     f.write(data)
     f.close()
     term.setTextColor(colors.green)
-    print("saved " .. rel .. " (" .. #data .. " b)")
+    print("saved " .. localRel .. " (" .. #data .. " b)")
     term.setTextColor(colors.white)
     return true
 end
@@ -108,7 +109,9 @@ if not http then
 end
 
 if mode == "receiver" then
-    local ok = download("deploy/receiver.lua")
+    -- bootstraps the receiver FLAT into the root folder, so the command
+    -- `receiver` works (deploy/startup.lua also looks for receiver.lua there)
+    local ok = download("deploy/receiver.lua", "receiver.lua")
     print("")
     if ok then
         term.setTextColor(colors.yellow)
