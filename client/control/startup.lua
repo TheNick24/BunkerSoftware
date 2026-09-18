@@ -71,11 +71,12 @@ if args[1] == "setup" then
     if #p1 < 4 then
         term.setTextColor(colors.red); print("PIN too short (min. 4)!"); return
     end
-    saveHash(bunkerlib.sha256(p1))
+    saveHash(bunkerlib.hashPassword(p1))
     term.setTextColor(colors.green)
     print("PIN saved!")
     term.setTextColor(colors.gray)
-    print("Hash: " .. bunkerlib.sha256(p1))
+    print("Hash: " .. tostring(loadHash()))
+    print("(rewritten as salted PBKDF2-HMAC-SHA256)")
     return
 end
 
@@ -89,9 +90,10 @@ if args[1] == "test" then
     term.setTextColor(colors.white)
     print("Stored: " .. tostring(loadHash()))
     if args[2] then
-        local h = bunkerlib.sha256(args[2])
-        print("sha256(" .. args[2] .. ") = " .. h)
-        if h == loadHash() then
+        term.setTextColor(colors.yellow)
+        print("Checking '" .. args[2] .. "' against stored value...")
+        term.setTextColor(colors.white)
+        if bunkerlib.verifyPassword(args[2], loadHash()) then
             term.setTextColor(colors.green)
             print("MATCH!")
         else
@@ -238,7 +240,7 @@ local function handleKey(key)
         code = ""; msg = nil; drawKeypad()
     elseif key == "OK" then
         if #code == 0 then return end
-        if bunkerlib.sha256(code) == loadHash() then
+        if bunkerlib.verifyPassword(code, loadHash()) then
             openDoor()
             redraw("ACCESS GRANTED", colors.green)
             if insideMon then drawInsideMonitor("open") end

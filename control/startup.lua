@@ -11,68 +11,6 @@ local dir = fs.getDir(shell.getRunningProgram())
 package.path = fs.combine(dir, "?.lua") .. ";" .. package.path
 local bunkerlib = require("bunkerlib")
 
--- ============ SHA-256 ============
-local band = bit32.band
-local bxor = bit32.bxor
-local rrotate = bit32.rrotate
-local rshift = bit32.rshift
-
-local K = {
-    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
-}
-
-local function sha256(msg)
-    local len = #msg * 8
-    msg = msg .. "\128"
-    while #msg % 64 ~= 56 do msg = msg .. "\0" end
-    local h32 = math.floor(len / 4294967296)
-    local l32 = len % 4294967296
-    msg = msg .. string.char(
-        0, 0, 0, 0,
-        math.floor(h32 / 16777216) % 256, math.floor(h32 / 65536) % 256, math.floor(h32 / 256) % 256, h32 % 256,
-        math.floor(l32 / 16777216) % 256, math.floor(l32 / 65536) % 256, math.floor(l32 / 256) % 256, l32 % 256
-    )
-
-    local H = { 0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19 }
-
-    for chunk = 0, #msg - 1, 64 do
-        local W = {}
-        for t = 0, 15 do
-            local o = chunk + t * 4
-            local a = string.byte(msg, o + 1) or 0
-            local b = string.byte(msg, o + 2) or 0
-            local c = string.byte(msg, o + 3) or 0
-            local d = string.byte(msg, o + 4) or 0
-            W[t] = a * 16777216 + b * 65536 + c * 256 + d
-        end
-        for t = 16, 63 do
-            local s0 = bxor(rrotate(W[t - 15], 7), rrotate(W[t - 15], 18), rshift(W[t - 15], 3))
-            local s1 = bxor(rrotate(W[t - 2], 17), rrotate(W[t - 2], 19), rshift(W[t - 2], 10))
-            W[t] = band(W[t - 16] + s0 + W[t - 7] + s1)
-        end
-        local a, b, c, d, e, f, g, h = H[1], H[2], H[3], H[4], H[5], H[6], H[7], H[8]
-        for t = 0, 63 do
-            local S1 = bxor(rrotate(e, 6), rrotate(e, 11), rrotate(e, 25))
-            local ch = band(e, f) + band(bxor(e, 0xFFFFFFFF), g)
-            local t1 = band(h + S1 + ch + K[t + 1] + W[t])
-            local S0 = bxor(rrotate(a, 2), rrotate(a, 13), rrotate(a, 22))
-            local maj = band(a, b) + band(a, c) + band(b, c)
-            local t2 = band(S0 + maj)
-            h = g; g = f; f = e; e = band(d + t1); d = c; c = b; b = a; a = band(t1 + t2)
-        end
-        H[1] = band(H[1] + a); H[2] = band(H[2] + b); H[3] = band(H[3] + c); H[4] = band(H[4] + d)
-        H[5] = band(H[5] + e); H[6] = band(H[6] + f); H[7] = band(H[7] + g); H[8] = band(H[8] + h)
-    end
-    return string.format("%08x%08x%08x%08x%08x%08x%08x%08x", H[1], H[2], H[3], H[4], H[5], H[6], H[7], H[8])
-end
-
 -- ============ CONFIG ============
 local HASH_FILE = "bunker.hash"
 local UPDATE_INTERVAL = 2
@@ -95,8 +33,8 @@ local doors = {
     { id = "control-door", name = "Control Door" },
 }
 
--- Safety doors: binary doors that can only be OPEN or CLOSED.
--- Same pattern as the doors, but their own group/action.
+-- Safety doors: ALARM doors that normally stand OPEN and only close in an
+-- emergency. Close them all at once with the `alarm` command (red banner).
 local safetyDoors = {
     { id = "me-safety-1",          name = "ME Safety Door" },
     { id = "distributor-safety-1", name = "Distributor Safety Door" },
@@ -160,7 +98,7 @@ local function runSetup()
         print("Password too short (min. 6 characters)!")
         return
     end
-    local h = sha256(p1)
+    local h = bunkerlib.hashPassword(p1)
     saveHash(h)
     term.setTextColor(colors.green)
     print("Password saved!")
@@ -184,7 +122,7 @@ local function runControl()
     print("Password:")
     term.setTextColor(colors.gray)
     local input = read("*")
-    if sha256(input) ~= expected then
+    if not bunkerlib.verifyPassword(input, expected) then
         term.setTextColor(colors.red)
         print("Wrong password!")
         return
@@ -208,13 +146,14 @@ local function runControl()
 
     local buttons = {} -- buttons[monitorName][y] = { id, action }
     local statuses = {}
+    local alarm = false -- true = emergency: all safety doors CLOSED
 
     term.clear()
     term.setCursorPos(1, 1)
     term.setTextColor(colors.cyan)
     print("=== MAMDANI OS ===")
     term.setTextColor(colors.gray)
-    print("Commands: s=status  exit=exit")
+    print("Type a device id + on/off/toggle, 'alarm', 'list' or 'exit'.")
 
     local function countEntries(panel)
         if panel.sections then
@@ -230,23 +169,107 @@ local function runControl()
         for _, mon in ipairs(monitors) do
             local panel = MONITOR_PANELS[mon.name]
             bunkerlib.drawHeader(mon.mon)
+            local n, lastRow
             if panel and countEntries(panel) > 0 then
                 local btns = {}
                 buttons[mon.name] = btns
-                local n, lastRow = bunkerlib.drawPanel(mon.mon, panel, statuses, btns, true)
                 local total = countEntries(panel)
+                n, lastRow = bunkerlib.drawPanel(mon.mon, panel, statuses, btns, true)
                 bunkerlib.drawFooter(mon.mon, lastRow - 5, panel.title, "CLIENTS: " .. n .. "/" .. total)
             else
+                n, lastRow = 0, 3
                 bunkerlib.drawInfoPlaceholder(mon.mon)
                 bunkerlib.drawFooter(mon.mon, 3, "INFO DISPLAY")
+            end
+            if alarm then
+                -- red alarm banner across the footer line of every monitor
+                local w, h = mon.mon.getSize()
+                local rows = panel and countEntries(panel) > 0 and (lastRow - 5) or 3
+                local y = math.max(h - 1, 5 + rows + 2)
+                mon.mon.setBackgroundColor(colors.red)
+                mon.mon.setTextColor(colors.white)
+                mon.mon.setCursorPos(1, y)
+                mon.mon.clearLine()
+                mon.mon.setCursorPos(1, y)
+                mon.mon.write("!! ALARM !!")
+                mon.mon.setBackgroundColor(colors.black)
             end
         end
     end
 
     drawMonitors()
+
+    -- ---- command console (type device commands directly) ----
+    local cmdLine = ""
+    local running = true
+
+    local function drawPrompt()
+        local _, th = term.getSize()
+        term.setCursorPos(1, th)
+        term.setBackgroundColor(colors.black)
+        term.clearLine()
+        term.setTextColor(colors.cyan)
+        term.write("> " .. cmdLine)
+        term.setTextColor(colors.white)
+    end
+
+    local function runCommand(line)
+        local parts = {}
+        for w in line:gmatch("%S+") do parts[#parts + 1] = w end
+        if #parts == 0 then return end
+        local cmd = parts[1]:lower()
+
+        if cmd == "exit" then
+            print("Bye.")
+            running = false
+        elseif cmd == "list" or cmd == "status" or cmd == "s" then
+            local found = false
+            for id, s in pairs(statuses) do
+                found = true
+                print(string.format("%-20s %s", id, (s.state and "STATE ON" or "STATE OFF")))
+            end
+            if not found then print("(no known devices)") end
+        elseif cmd == "alarm" or cmd == "panic" then
+            local target = (parts[2] or "on"):lower()
+            if target == "off" then
+                alarm = false
+                local n = bunkerlib.emergencyDoors(statuses, false)
+                term.setTextColor(colors.green)
+                print("Alarm OFF - " .. n .. " safety door(s) reopened.")
+            else
+                alarm = true
+                local n = bunkerlib.emergencyDoors(statuses, true)
+                term.setTextColor(colors.red)
+                print("ALARM - " .. n .. " safety door(s) CLOSED.")
+            end
+            term.setTextColor(colors.white)
+            drawMonitors()
+        elseif cmd == "help" then
+            print("Commands: list | <id> on|off|toggle | alarm [on|off] | exit")
+        else
+            local st = statuses[cmd]
+            if not st then
+                print("Unknown command or device: " .. cmd)
+                return
+            end
+            local target = (parts[2] or "toggle"):lower()
+            local state
+            if target == "on" then
+                state = true
+            elseif target == "off" then
+                state = false
+            else
+                state = not st.state
+            end
+            rednet.send(st.senderId, { room = cmd, cmd = st.cmd or "light", state = state }, "bunker_cmd")
+            print(cmd .. " -> " .. (state and "ON" or "OFF"))
+        end
+    end
+
+    drawPrompt()
     local updateTimer = os.startTimer(UPDATE_INTERVAL)
 
-    while true do
+    while running do
         local event, p1, p2, p3 = os.pullEvent()
 
         if event == "timer" and p1 == updateTimer then
@@ -269,14 +292,21 @@ local function runControl()
         elseif event == "rednet_message" then
             local senderId, message, protocol = p1, p2, p3
             if protocol == "bunker_status" and type(message) == "table" and message.id then
-                bunkerlib.setStatus(statuses, message.id, senderId, message.state)
+                bunkerlib.setStatus(statuses, message.id, senderId, message.state, message.cmd)
                 drawMonitors()
             end
         elseif event == "char" then
-            if p1:lower() == "s" then
-                for id, s in pairs(statuses) do
-                    print(id .. ": " .. (s.state and "STATE ON" or "STATE OFF"))
-                end
+            cmdLine = cmdLine .. p1
+            drawPrompt()
+        elseif event == "key" then
+            if p1 == keys.enter then
+                cmdLine = cmdLine:match("^%s*(.-)%s*$") or ""
+                runCommand(cmdLine)
+                cmdLine = ""
+                drawPrompt()
+            elseif p1 == keys.backspace then
+                cmdLine = string.sub(cmdLine, 1, #cmdLine - 1)
+                drawPrompt()
             end
         end
 
