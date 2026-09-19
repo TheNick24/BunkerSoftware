@@ -11,7 +11,7 @@ local bunkerlib = require("bunkerlib")
 
 -- ============ CONFIG (edit here!) ============
 local NAME           = "Entrance"
-local MODEM_SIDE     = nil   -- e.g. "left"; nil = auto-detect
+local MODEM_SIDE     = "back"   -- e.g. "left"; nil = auto-detect
 local UPDATE_INTERVAL = 2
 
 -- Every device this computer controls.
