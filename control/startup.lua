@@ -295,7 +295,7 @@ local function runControl()
     -- shell niceties: history (up/down), TAB completion, clean prompt line
     local history = loadHistory()
     local histIdx = nil
-    local COMMANDS = { "unlock", "lock", "list", "status", "s", "help", "alarm", "panic", "exit" }
+    local COMMANDS = { "unlock", "lock", "list", "status", "s", "clear", "cls", "help", "alarm", "panic", "exit" }
     local STATES   = { "on", "off", "toggle" }
     local compToken  = nil -- the (partial) token being completed
     local compField  = nil -- which token slot we were completing on
@@ -449,6 +449,14 @@ local function runControl()
             running = false
         elseif cmd == "lock" then
             lockConsole("manual")
+        elseif cmd == "clear" or cmd == "cls" then
+            term.clear()
+            term.setCursorPos(1, 1)
+            term.setTextColor(colors.cyan)
+            print("=== MAMDANI OS ===")
+            term.setTextColor(colors.gray)
+            print("Screen cleared - `help` shows the commands.")
+            term.setTextColor(colors.white)
         elseif cmd == "list" or cmd == "status" or cmd == "s" then
             local found = false
             for id, s in pairs(statuses) do
@@ -459,7 +467,7 @@ local function runControl()
         elseif cmd == "alarm" or cmd == "panic" then
             setAlarm((parts[2] or "on"):lower() ~= "off")
         elseif cmd == "help" then
-            print("Commands: unlock | lock | list | <id> on|off|toggle | alarm [on|off] | exit")
+            print("Commands: unlock | lock | list | <id> on|off|toggle | alarm [on|off] | clear | exit")
         else
             local st = statuses[cmd]
             if not st then
@@ -529,6 +537,15 @@ local function runControl()
                 local line = cmdLine:match("^%s*(.-)%s*$") or ""
                 resetComp()
                 pushHistory(line)
+                -- echo the executed line with the prefix (terminal style)
+                if line ~= "" then
+                    local _, th = term.getSize()
+                    term.setCursorPos(1, th)
+                    term.clearLine()
+                    term.setTextColor(locked and colors.red or colors.cyan)
+                    print((locked and PROMPT_LOCKED or PROMPT) .. line)
+                    term.setTextColor(colors.white)
+                end
                 runCommand(line)
                 cmdLine = ""
                 histIdx = nil
