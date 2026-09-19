@@ -12,7 +12,7 @@ local bunkerlib = require("bunkerlib")
 -- ============ CONFIG (edit here!) ============
 local NAME           = "Entrance"
 local MODEM_SIDE     = "back"   -- e.g. "left"; nil = auto-detect
-local UPDATE_INTERVAL = 2
+local UPDATE_INTERVAL = 5 -- status heartbeat (plain on/off goes out instantly)
 
 -- Every device this computer controls.
 -- `driver` selects HOW it is controlled:

@@ -8,6 +8,7 @@
 -- Usage:
 --   deploy            deploy to ALL targets
 --   deploy <role>     deploy only to the targets of that role
+--   deploy update     refresh this deployer from GitHub over HTTP (no wget)
 --   deploy targets    print the known targets
 -- ============================================
 
@@ -231,6 +232,65 @@ end
 if args[1] == "targets" then
     print("Known targets:")
     listTargets()
+    return
+end
+
+-- `deploy update` refreshes the deployer's local repo mirror from GitHub over
+-- HTTP, so you no longer have to re-run the wget installer before deploying.
+-- It first re-downloads the installer itself, so new/renamed files are picked
+-- up too, and then refreshes deploy.lua for the NEXT deploy run.
+if args[1] == "update" then
+    if not http then
+        term.setTextColor(colors.red)
+        print("HTTP API is disabled on this server/license!")
+        term.setTextColor(colors.white)
+        return
+    end
+
+    local function fetch(url, redirects)
+        redirects = redirects or 0
+        local res = http.get(url)
+        if not res then return nil, "no response" end
+        local code = res.getResponseCode()
+        if code == 200 then
+            local data = res.readAll()
+            res.close()
+            return data
+        end
+        if code == 301 or code == 302 or code == 303 or code == 307 or code == 308 then
+            local loc = res.getResponseHeaders() and res.getResponseHeaders()["location"]
+            res.close()
+            if loc and redirects < 5 then
+                if loc:sub(1, 1) == "/" then
+                    local scheme, host = url:match("^(https?://[^/]+)")
+                    loc = (scheme or "") .. loc
+                end
+                return fetch(loc, redirects + 1)
+            end
+        end
+        res.close()
+        return nil, "HTTP " .. tostring(code)
+    end
+
+    print("Updating from https://raw.githubusercontent.com/TheNick24/BunkerSoftware/dev")
+    local installer, err = fetch("https://raw.githubusercontent.com/TheNick24/BunkerSoftware/dev/tools/install.lua")
+    if not installer then
+        term.setTextColor(colors.red)
+        print("Failed to fetch installer: " .. tostring(err))
+        term.setTextColor(colors.white)
+        return
+    end
+    local f = fs.open("tools/install.lua", "w")
+    f.write(installer)
+    f.close()
+    shell.run("tools/install.lua", "quiet")
+    -- refresh deploy.lua: the next `deploy` run starts from the new file
+    if pcall(fs.delete, "deploy.lua") then
+        pcall(fs.copy, "deploy/startup.lua", "deploy.lua")
+    end
+    term.setTextColor(colors.green)
+    print("Deployer updated - run `deploy <role>` to push.")
+    term.setTextColor(colors.white)
     return
 end
 

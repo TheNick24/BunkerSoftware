@@ -92,14 +92,18 @@ end
 -- ============ MAIN ============
 local args = { ... }
 local mode = (args[1] or "all"):lower()
+local quiet = mode == "quiet" -- used by `deploy update` (no banner/instructions)
+if quiet then mode = "all" end
 
-term.clear()
-term.setCursorPos(1, 1)
-term.setTextColor(colors.cyan)
-print("=== MAMDANI OS - HTTP INSTALLER ===")
-term.setTextColor(colors.gray)
-print("Source: " .. BASE_URL)
-term.setTextColor(colors.white)
+if not quiet then
+    term.clear()
+    term.setCursorPos(1, 1)
+    term.setTextColor(colors.cyan)
+    print("=== MAMDANI OS - HTTP INSTALLER ===")
+    term.setTextColor(colors.gray)
+    print("Source: " .. BASE_URL)
+    term.setTextColor(colors.white)
+end
 
 if not http then
     term.setTextColor(colors.red)
@@ -136,5 +140,7 @@ else
     print("Done. " .. okCount .. " ok, " .. failCount .. " failed.")
 end
 term.setTextColor(colors.yellow)
-print("Next: run `deploy` (and set TARGETS in deploy/startup.lua).")
+if not quiet then
+    print("Next: run `deploy` (and set TARGETS in deploy/startup.lua).")
+end
 term.setTextColor(colors.white)

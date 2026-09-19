@@ -205,11 +205,14 @@ them from a single computer over rednet:
 After the first deploy every target boots into a launcher that runs the
 receiver AND the main program together (`parallel.waitForAll`), so future
 updates are fully automatic: edit files on the admin computer, run `deploy`,
-done.
+done. When the repo changed on GitHub, refresh the admins's local mirror
+first with `deploy update` (does the old `wget run .../tools/install.lua`
+remotely) - you don't have to type the wget URL anymore.
 
 ```
 deploy            deploy to all targets
 deploy <role>     deploy only to the targets of a role (controlroom, control, entrance, ...)
+deploy update     refresh the admin's local repo mirror from GitHub over HTTP
 deploy targets    show the configured targets
 ```
 
