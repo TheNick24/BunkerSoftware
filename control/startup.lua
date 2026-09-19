@@ -56,7 +56,7 @@ local MONITOR_PANELS = {
 
 -- Dedicated monitor that ONLY shows a big tappable ALARM button
 -- (tap = start/stop the emergency, same as the `alarm` console command).
-local ALARM_BUTTON_MONITOR = "tm_monitor_0"
+local ALARM_BUTTON_MONITOR = "monitor_14"
 
 -- ============ HASH ============
 local function loadHash()
