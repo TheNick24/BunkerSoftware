@@ -184,23 +184,40 @@ local function runControl()
                 bunkerlib.drawInfoPlaceholder(mon.mon)
                 bunkerlib.drawFooter(mon.mon, 3, "INFO DISPLAY")
             end
-            if alarm then
-                -- red alarm banner across the footer line of every monitor
-                local w, h = mon.mon.getSize()
-                local rows = panel and countEntries(panel) > 0 and (lastRow - 5) or 3
-                local y = math.max(h - 1, 5 + rows + 2)
-                mon.mon.setBackgroundColor(colors.red)
-                mon.mon.setTextColor(colors.white)
-                mon.mon.setCursorPos(1, y)
-                mon.mon.clearLine()
-                mon.mon.setCursorPos(1, y)
-                mon.mon.write("!! ALARM !!")
-                mon.mon.setBackgroundColor(colors.black)
-            end
+            -- ALARM button in the footer line of every monitor
+            local w, h = mon.mon.getSize()
+            local rows = panel and countEntries(panel) > 0 and (lastRow - 5) or 3
+            local y = math.max(h - 1, 5 + rows + 2)
+            local label = alarm and " !! ALARM !! " or " [ ALARM ] "
+            label = string.sub(label, 1, w)
+            local x = w - #label + 1
+            mon.mon.setCursorPos(x, y)
+            mon.mon.setBackgroundColor(alarm and colors.red or colors.orange)
+            mon.mon.setTextColor(colors.white)
+            mon.mon.write(label)
+            mon.mon.setBackgroundColor(colors.black)
+            local alm = buttons[mon.name] or {}
+            buttons[mon.name] = alm
+            alm[y] = { id = "__ALARM__" }
         end
     end
 
     drawMonitors()
+
+    -- ---- alarm control (shared by footer button + console) ----
+    local function setAlarm(on)
+        alarm = on
+        local n = bunkerlib.emergencyDoors(statuses, on)
+        drawMonitors()
+        if on then
+            term.setTextColor(colors.red)
+            print("ALARM - " .. n .. " safety door(s) CLOSED.")
+        else
+            term.setTextColor(colors.green)
+            print("Alarm OFF - " .. n .. " safety door(s) reopened.")
+        end
+        term.setTextColor(colors.white)
+    end
 
     -- ---- command console (type device commands directly) ----
     local cmdLine = ""
@@ -233,20 +250,7 @@ local function runControl()
             end
             if not found then print("(no known devices)") end
         elseif cmd == "alarm" or cmd == "panic" then
-            local target = (parts[2] or "on"):lower()
-            if target == "off" then
-                alarm = false
-                local n = bunkerlib.emergencyDoors(statuses, false)
-                term.setTextColor(colors.green)
-                print("Alarm OFF - " .. n .. " safety door(s) reopened.")
-            else
-                alarm = true
-                local n = bunkerlib.emergencyDoors(statuses, true)
-                term.setTextColor(colors.red)
-                print("ALARM - " .. n .. " safety door(s) CLOSED.")
-            end
-            term.setTextColor(colors.white)
-            drawMonitors()
+            setAlarm((parts[2] or "on"):lower() ~= "off")
         elseif cmd == "help" then
             print("Commands: list | <id> on|off|toggle | alarm [on|off] | exit")
         else
@@ -282,13 +286,17 @@ local function runControl()
             local btns = buttons[p1]
             if btns and btns[p3] then
                 local btn = btns[p3]
-                local status = statuses[btn.id]
-                if status then
-                    local panel = MONITOR_PANELS[p1]
-                    local action = panel and bunkerlib.ACTIONS[btn.action or "light"]
-                    if action then
-                        local msg = action(status, btn.id)
-                        rednet.send(status.senderId, msg, "bunker_cmd")
+                if btn.id == "__ALARM__" then
+                    setAlarm(not alarm)
+                else
+                    local status = statuses[btn.id]
+                    if status then
+                        local panel = MONITOR_PANELS[p1]
+                        local action = panel and bunkerlib.ACTIONS[btn.action or "light"]
+                        if action then
+                            local msg = action(status, btn.id)
+                            rednet.send(status.senderId, msg, "bunker_cmd")
+                        end
                     end
                 end
             end
