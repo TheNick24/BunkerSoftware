@@ -13,10 +13,10 @@ Custom operating system / control system for a bunker network in ComputerCraft.
 - `lib/actions.lua` - Generic panel actions (`light`)
 - `lib/monitor.lua` - Monitor rendering (headers, toggle tables, panels, footer)
 - `lib/client.lua` - Room client runtime (`runClient`)
-- `control/startup.lua` - Control room software (monitor UI, password login, rednet)
+- `control/startup.lua` - ControlRoom software (control room computer with the monitor panels)
 - `client/entrance/startup.lua` - Room client (Entrance) - device control, rednet status
 - `client/meroom/startup.lua` - Room client (ME-Core) - device control, rednet status
-- `client/control/startup.lua` - Client for the control room computer (its own devices)
+- `client/control/startup.lua` - Door keypad + client on the separate **Control** computer (door devices + keypad/inside monitors)
 - `client/distributor1/startup.lua` - Room client (Distributor_1) - device control, rednet status
 - `remote/startup.lua` - Remote CLI (e.g. pocket computer) - list/control devices from the shell
 - `deploy/startup.lua` - Deploy tool (push files to every computer over rednet)
@@ -141,6 +141,8 @@ run `control setup` in the control room.
   - `list` - show all known device states
   - `help`, `exit`
   While an alarm is active every monitor shows a red `!! ALARM !!` banner.
+  The dedicated `monitor_13` shows a big tappable `ALARM` button instead;
+  tap it to start/stop the emergency without the terminal.
   The control room learns each device's `cmd` type from the status broadcasts,
   so the console works for lights, doors and safety doors alike.
 
@@ -201,19 +203,20 @@ them from a single computer over rednet:
    reboots them.
 
 After the first deploy every target boots into a launcher that runs the
-receiver AND the main program together (`parallel.waitForEach`), so future
+receiver AND the main program together (`parallel.waitForAll`), so future
 updates are fully automatic: edit files on the admin computer, run `deploy`,
 done.
 
 ```
 deploy            deploy to all targets
-deploy <role>     deploy only to the targets of a role (control, entrance, ...)
+deploy <role>     deploy only to the targets of a role (controlroom, control, entrance, ...)
 deploy targets    show the configured targets
 ```
 
 Notes:
-- Files are streamed in 16 KB chunks; a missing chunk just means the file is
-  written once every chunk has arrived.
+- Files are streamed in 16 KB chunks; every file must be acknowledged by
+  the target. A missing or dropped chunk just means the whole file is re-sent
+  (up to 4 attempts), so nothing is written until it arrived completely.
 - `REBOOT_AFTER = true` restarts every target right after the transfer. Set
   it to `false` if a target is in the middle of something.
 - Pocket computers are not auto-deployed (they have no launcher); copy
