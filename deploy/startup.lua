@@ -6,8 +6,11 @@
 -- this file). Every target computer must be running deploy/receiver.lua.
 --
 -- Usage:
---   deploy            deploy to ALL targets
---   deploy <role>     deploy only to the targets of that role
+--   deploy            deploy to ALL targets over rednet (push, fallback)
+--   deploy <role>     deploy only to the targets of that role (push)
+--   deploy update     refresh this deployer from GitHub over HTTP (no wget)
+--   deploy refresh    tell all targets to self-update over HTTP (no data on
+--                     rednet, each target pulls from GitHub and reboots)
 --   deploy targets    print the known targets
 -- ============================================
 
@@ -43,7 +46,8 @@ local ROLES = {
     -- ControlRoom (monitor panels + alarm UI, the screens)
     controlroom = { src = "control/startup.lua",            dest = "main.lua", launcher = true },
     entrance    = { src = "client/entrance/startup.lua",    dest = "main.lua", launcher = true },
-    meroom      = { src = "client/meroom/startup.lua",      dest = "main.lua", launcher = true },
+    meroom      = { src = "client/meroom/startup.lua", dest = "main.lua", launcher = true },
+    maschineroom = { src = "client/energyroom/startup.lua", dest = "main.lua", launcher = true },
     distributor = { src = "client/distributor1/startup.lua", dest = "main.lua", launcher = true },
     -- Control = the separate door-keypad computer (NOT ControlRoom). The
     -- keypad / inside monitors hang off this computer.
@@ -60,7 +64,8 @@ local TARGETS = {
     [10] = "controlroom",    -- ControlRoom: the monitor panels + alarm UI
     [12] = "control",        -- Control: separate door-keypad computer (door + its monitors)
     [28] = "entrance",       -- Entrance room client
-    [27] = "meroom",         -- ME-Core room client
+    [27] = "meroom",      -- ME-Core room client
+    [25] = "maschineroom",   -- Maschine Room client
     [24] = "distributor",    -- Distributor_1 room client
     [23] = "remote",         -- pocket computer (remote CLI)
 }
@@ -234,12 +239,89 @@ if args[1] == "targets" then
     return
 end
 
+-- `deploy update` refreshes the deployer's local repo mirror from GitHub over
+-- HTTP, so you no longer have to re-run the wget installer before deploying.
+-- It first re-downloads the installer itself, so new/renamed files are picked
+-- up too, and then refreshes deploy.lua for the NEXT deploy run.
+if args[1] == "update" then
+    if not http then
+        term.setTextColor(colors.red)
+        print("HTTP API is disabled on this server/license!")
+        term.setTextColor(colors.white)
+        return
+    end
+
+    local function fetch(url, redirects)
+        redirects = redirects or 0
+        local res = http.get(url)
+        if not res then return nil, "no response" end
+        local code = res.getResponseCode()
+        if code == 200 then
+            local data = res.readAll()
+            res.close()
+            return data
+        end
+        if code == 301 or code == 302 or code == 303 or code == 307 or code == 308 then
+            local loc = res.getResponseHeaders() and res.getResponseHeaders()["location"]
+            res.close()
+            if loc and redirects < 5 then
+                if loc:sub(1, 1) == "/" then
+                    local scheme, host = url:match("^(https?://[^/]+)")
+                    loc = (scheme or "") .. loc
+                end
+                return fetch(loc, redirects + 1)
+            end
+        end
+        res.close()
+        return nil, "HTTP " .. tostring(code)
+    end
+
+    print("Updating from https://raw.githubusercontent.com/TheNick24/BunkerSoftware/dev")
+    local installer, err = fetch("https://raw.githubusercontent.com/TheNick24/BunkerSoftware/dev/tools/install.lua")
+    if not installer then
+        term.setTextColor(colors.red)
+        print("Failed to fetch installer: " .. tostring(err))
+        term.setTextColor(colors.white)
+        return
+    end
+    local f = fs.open("tools/install.lua", "w")
+    f.write(installer)
+    f.close()
+    shell.run("tools/install.lua", "quiet")
+    -- refresh deploy.lua: the next `deploy` run starts from the new file
+    if pcall(fs.delete, "deploy.lua") then
+        pcall(fs.copy, "deploy/startup.lua", "deploy.lua")
+    end
+    term.setTextColor(colors.green)
+    print("Deployer updated - run `deploy <role>` to push.")
+    term.setTextColor(colors.white)
+    return
+end
+
 local modem = openModem()
 if not modem then
     print("No modem found!")
     return
 end
 print("Modem: " .. modem)
+
+-- `deploy refresh [role]` sends a rednet UPDATE trigger to the targets. Each
+-- target pulls its own files over HTTP from GitHub (fast, no data over
+-- rednet) and reboots. The classic `deploy` (rednet push) still exists for
+-- fallback / LAN use.
+if args[1] == "refresh" then
+    local filter = args[2]
+    local sent = 0
+    for id, role in pairs(TARGETS) do
+        if matchesRole(id, role, filter) then
+            rednet.send(id, { action = "update" }, "bunker_deploy")
+            sent = sent + 1
+        end
+    end
+    print("Sent " .. sent .. " update trigger(s) over rednet.")
+    print("Each target pulls its files itself over HTTP and reboots.")
+    return
+end
 
 local filter = args[1]
 local updated, failed, unconfirmed = 0, 0, 0
