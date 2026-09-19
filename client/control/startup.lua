@@ -29,7 +29,7 @@ local DEVICES = {
     { id = "control",            cmd = "light", driver = "relay",    relay = "redstone_relay_9",  side = "top" },
     { id = "control-corridor-1", cmd = "light", driver = "relay",    relay = "redstone_relay_9",  side = "right" },
     { id = "control-door",       cmd = "door",  driver = "door",  peripheral = "redstone_relay_10", side = "left" },
-    { id = "server-door", cmd = "door", driver = "door", peripheral = "redstone_relay_13", side = "back" },
+    { id = "server-door", cmd = "door", driver = "door", peripheral = "redstone_relay_13", side = "bottom" },
 }
 
 local DOOR_DEVICE = DEVICES[3]
