@@ -44,7 +44,8 @@ local ROLES = {
     -- ControlRoom (monitor panels + alarm UI, the screens)
     controlroom = { src = "control/startup.lua",            dest = "main.lua", launcher = true },
     entrance    = { src = "client/entrance/startup.lua",    dest = "main.lua", launcher = true },
-    meroom      = { src = "client/meroom/startup.lua",      dest = "main.lua", launcher = true },
+    meroom      = { src = "client/meroom/startup.lua", dest = "main.lua", launcher = true },
+    maschineroom = { src = "client/energyroom/startup.lua", dest = "main.lua", launcher = true },
     distributor = { src = "client/distributor1/startup.lua", dest = "main.lua", launcher = true },
     -- Control = the separate door-keypad computer (NOT ControlRoom). The
     -- keypad / inside monitors hang off this computer.
@@ -61,7 +62,8 @@ local TARGETS = {
     [10] = "controlroom",    -- ControlRoom: the monitor panels + alarm UI
     [12] = "control",        -- Control: separate door-keypad computer (door + its monitors)
     [28] = "entrance",       -- Entrance room client
-    [27] = "meroom",         -- ME-Core room client
+    [27] = "meroom",      -- ME-Core room client
+    [25] = "maschine-room",   -- Maschine Room client
     [24] = "distributor",    -- Distributor_1 room client
     [23] = "remote",         -- pocket computer (remote CLI)
 }

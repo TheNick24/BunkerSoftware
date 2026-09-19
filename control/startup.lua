@@ -21,10 +21,12 @@ local rooms = {
     { id = "entrance", name = "Entrance" },
     { id = "me",       name = "ME-Core" },
     { id = "control",  name = "Control-Room" },
+    { id = "maschine-room", name = "Maschine Room" },
 }
 
 local aux = {
     { id = "me-corridor-1", name = "ME Corridor 1" },
+    { id = "maschine-corridor-1", name = "Maschine Corridor 1" },
     { id = "control-corridor-1",  name = "CR Corridor 1"}
 }
 
