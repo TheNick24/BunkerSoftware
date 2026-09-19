@@ -31,6 +31,7 @@ local aux = {
 -- Doors. Same pattern as the light groups.
 local doors = {
     { id = "control-door", name = "Control Door" },
+    { id = "server-door", name = "Server Access Door"}
 }
 
 -- Safety doors: ALARM doors that normally stand OPEN and only close in an
