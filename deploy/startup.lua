@@ -111,6 +111,25 @@ local function readFile(path)
     return data
 end
 
+local function waitForAck(id, dest)
+    -- waits for the ack of ONE file; prints any other bunker_deploy message
+    -- that arrives while waiting (diagnostics for the return path)
+    local deadline = os.startTimer(ACK_TIMEOUT)
+    while true do
+        local e, p1, p2, p3 = os.pullEvent()
+        if e == "rednet_message" and p3 == "bunker_deploy" then
+            if p1 == id and type(p2) == "table" and p2.action == "ack" and p2.file == dest then
+                return true
+            end
+            term.setTextColor(colors.yellow)
+            print("   ? drop: " .. tostring(p1) .. " = " .. tostring(type(p2) == "table" and (p2.action or "?") or p2))
+            term.setTextColor(colors.white)
+        elseif e == "timer" and p1 == deadline then
+            return false
+        end
+    end
+end
+
 local function sendFile(id, dest, data)
     local total = math.max(1, math.ceil(#data / CHUNK_SIZE))
     for attempt = 1, MAX_ATTEMPTS do
@@ -119,13 +138,12 @@ local function sendFile(id, dest, data)
             rednet.send(id, { action = "file", file = dest, index = i, total = total, chunk = chunk }, "bunker_deploy")
             os.sleep(SEND_GAP)
         end
-        local sender, msg = rednet.receive("bunker_deploy", ACK_TIMEOUT)
-        if sender == id and type(msg) == "table" and msg.action == "ack" and msg.file == dest then
+        if waitForAck(id, dest) then
             print("   + ack " .. dest)
-            return true
+            return "ack"
         end
     end
-    return false
+    return "noack"
 end
 
 local function localWrite(dest, data)
@@ -143,56 +161,47 @@ local function deployRole(id, role)
     local cfg = ROLES[role]
     if not cfg then
         print("  ! unknown role: " .. role)
-        return false
+        return false, false
     end
     local self = (id == os.getComputerID())
     print("-> computer " .. id .. " (" .. role .. (self and ", this computer" or "") .. ")")
-    local ok = true
-    for _, f in ipairs(SHARED) do
-        local data = readFile(f.src)
+    local ok, unconfirmed = true, false
+    local function push(dest, data)
+        local res
         if not data then
             ok = false
+            return
         elseif self then
-            localWrite(f.dest, data)
-            print("   " .. f.dest .. " (local)")
-        elseif sendFile(id, f.dest, data) then
-            print("   " .. f.dest .. " (" .. #data .. " b)")
+            localWrite(dest, data)
+            print("   " .. dest .. " (local)")
+            return
         else
-            ok = false
-            print("   FAILED: " .. f.dest)
+            res = sendFile(id, dest, data)
+            if res == "ack" then
+                print("   " .. dest .. " (" .. #data .. " b)")
+            else
+                unconfirmed = true
+                print("   ! " .. dest .. " - NO ACK (sent " .. MAX_ATTEMPTS .. "x, no confirmation)")
+            end
         end
     end
-    local data = readFile(cfg.src)
-    if data then
-        if self then
-            localWrite(cfg.dest, data)
-            print("   " .. cfg.dest .. " (local)")
-        elseif sendFile(id, cfg.dest, data) then
-            print("   " .. cfg.dest .. " (" .. #data .. " b)")
-        else
-            ok = false
-            print("   FAILED: " .. cfg.dest)
-        end
-    else
-        ok = false
+    for _, f in ipairs(SHARED) do
+        local data = readFile(f.src)
+        push(f.dest, data)
     end
+    push(cfg.dest, readFile(cfg.src))
     if cfg.launcher then
-        if self then
-            localWrite("startup.lua", LAUNCHER)
-            print("   startup.lua (launcher, local)")
-        elseif sendFile(id, "startup.lua", LAUNCHER) then
-            print("   startup.lua (launcher)")
-        else
-            ok = false
-            print("   FAILED: startup.lua (launcher)")
-        end
+        push("startup.lua", LAUNCHER)
     end
     if ok and REBOOT_AFTER and not self then
         rednet.send(id, { action = "reboot" }, "bunker_deploy")
         os.sleep(0.5)
         print("   reboot")
     end
-    return ok
+    if ok and unconfirmed then
+        print("   (target reached - no acks received, files sent " .. MAX_ATTEMPTS .. "x)")
+    end
+    return ok, unconfirmed
 end
 
 local function listTargets()
@@ -230,23 +239,28 @@ end
 print("Modem: " .. modem)
 
 local filter = args[1]
-local updated, failed = 0, 0
+local updated, failed, unconfirmed = 0, 0, 0
 for id, role in pairs(TARGETS) do
     if matchesRole(id, role, filter) then
         if type(role) == "table" then
-            local ok = true
+            local ok, unconf = true, false
             for _, r in ipairs(role) do
-                if not deployRole(id, r) then ok = false end
+                local o, u = deployRole(id, r)
+                if not o then ok = false end
+                if u then unconf = true end
             end
             if ok then updated = updated + 1 else failed = failed + 1 end
+            if unconf then unconfirmed = unconfirmed + 1 end
         else
-            if deployRole(id, role) then updated = updated + 1 else failed = failed + 1 end
+            local ok, unconf = deployRole(id, role)
+            if ok then updated = updated + 1 else failed = failed + 1 end
+            if unconf then unconfirmed = unconfirmed + 1 end
         end
     end
 end
 
 print("")
-print("Done. " .. updated .. " ok, " .. failed .. " failed.")
+print("Done. " .. updated .. " ok, " .. failed .. " failed" .. (unconfirmed > 0 and " (" .. unconfirmed .. " no ack)" or "") .. ".")
 if updated + failed == 0 then
     print("(no targets matched - run `deploy targets` to check the config)")
 end
