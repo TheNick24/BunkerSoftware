@@ -184,6 +184,57 @@ local function runControl()
     local statuses = {}
     local alarm = false -- true = emergency: all safety doors CLOSED
 
+    -- ---- output scrollback ----
+    -- All console output goes into a bounded buffer that is rendered into the
+    -- area ABOVE the input line, so new lines never push the input away.
+    -- PGUP/PGDN scroll back through the history.
+    local outState = {} -- { t = text, c = color }
+    local OUT_MAX  = 200
+    local scroll   = 0
+    local outColor = colors.white
+
+    local function renderOut()
+        local w, th = term.getSize()
+        local view = th - 1
+        local total = #outState
+        local start = math.max(1, total - view - scroll + 1)
+        term.setBackgroundColor(colors.black)
+        for y = 1, view do
+            term.setCursorPos(1, y)
+            term.clearLine()
+            local idx = start + (y - 1)
+            if idx <= total then
+                local e = outState[idx]
+                term.setTextColor(e.c or colors.white)
+                term.write(e.t:sub(1, w))
+            end
+        end
+        term.setTextColor(colors.white)
+    end
+
+    local function outWrite(text, color)
+        color = color or outColor
+        local w = term.getSize()
+        for chunk in (text .. "\n"):gmatch("(.-)\n") do
+            while #chunk > w do
+                outState[#outState + 1] = { t = chunk:sub(1, w), c = color }
+                if #outState > OUT_MAX then table.remove(outState, 1) end
+                chunk = chunk:sub(w + 1)
+            end
+            outState[#outState + 1] = { t = chunk, c = color }
+            if #outState > OUT_MAX then table.remove(outState, 1) end
+        end
+        scroll = 0
+        renderOut()
+    end
+
+    local function out(...)
+        local n = select("#", ...)
+        local parts = {}
+        for i = 1, n do parts[i] = tostring(select(i, ...)) end
+        outWrite(table.concat(parts, "\t"))
+    end
+
     term.clear()
     term.setCursorPos(1, 1)
     term.setTextColor(colors.cyan)
@@ -269,13 +320,10 @@ local function runControl()
         local n = bunkerlib.emergencyDoors(statuses, on)
         drawMonitors()
         if on then
-            term.setTextColor(colors.red)
-            print("ALARM - " .. n .. " safety door(s) CLOSED.")
+            outWrite("ALARM - " .. n .. " safety door(s) CLOSED.", colors.red)
         else
-            term.setTextColor(colors.green)
-            print("Alarm OFF - " .. n .. " safety door(s) reopened.")
+            outWrite("Alarm OFF - " .. n .. " safety door(s) reopened.", colors.green)
         end
-        term.setTextColor(colors.white)
     end
 
     -- ---- command console (type device commands directly) ----
@@ -392,13 +440,13 @@ local function runControl()
     local function lockConsole(reason)
         locked = true
         audit("lock: " .. reason)
-        print("Console locked" .. (reason ~= "" and (" (" .. reason .. ")") or "") .. ".")
+        outWrite("Console locked" .. (reason ~= "" and (" (" .. reason .. ")") or "") .. ".", colors.red)
         drawPrompt()
     end
 
     local function doUnlock()
         if os.time() < lockedUntil then
-            print("Locked out - try again in " .. (lockedUntil - os.time()) .. "s.")
+            outWrite("Locked out - try again in " .. (lockedUntil - os.time()) .. "s.", colors.yellow)
             return
         end
         local _, th = term.getSize()
@@ -413,7 +461,7 @@ local function runControl()
             locked = false
             failed = 0
             audit("unlock OK")
-            print("Access granted.")
+            outWrite("Access granted.", colors.green)
             resetLockTimer()
         else
             failed = failed + 1
@@ -421,9 +469,9 @@ local function runControl()
             if failed >= MAX_FAILED then
                 lockedUntil = os.time() + LOCKOUT_SECONDS
                 failed = 0
-                print("Too many failed attempts - locked out for " .. LOCKOUT_SECONDS .. "s.")
+                outWrite("Too many failed attempts - locked out for " .. LOCKOUT_SECONDS .. "s.", colors.red)
             else
-                print("Wrong password - " .. (MAX_FAILED - failed) .. " attempt(s) left.")
+                outWrite("Wrong password - " .. (MAX_FAILED - failed) .. " attempt(s) left.", colors.red)
             end
         end
     end
@@ -439,39 +487,36 @@ local function runControl()
                 doUnlock()
             else
                 audit("blocked while locked: " .. cmd)
-                print("Console locked - type `unlock` first.")
+                outWrite("Console locked - type `unlock` first.", colors.red)
             end
             return
         end
 
         if cmd == "exit" then
-            print("Bye.")
+            outWrite("Bye.")
             running = false
         elseif cmd == "lock" then
             lockConsole("manual")
         elseif cmd == "clear" or cmd == "cls" then
-            term.clear()
-            term.setCursorPos(1, 1)
-            term.setTextColor(colors.cyan)
-            print("=== MAMDANI OS ===")
-            term.setTextColor(colors.gray)
-            print("Screen cleared - `help` shows the commands.")
-            term.setTextColor(colors.white)
+            outState = {}
+            scroll = 0
+            outWrite("=== MAMDANI OS ===", colors.cyan)
+            outWrite("Screen cleared - `help` shows the commands.", colors.gray)
         elseif cmd == "list" or cmd == "status" or cmd == "s" then
             local found = false
             for id, s in pairs(statuses) do
                 found = true
-                print(string.format("%-20s %s", id, (s.state and "STATE ON" or "STATE OFF")))
+                outWrite(string.format("%-20s %s", id, (s.state and "STATE ON" or "STATE OFF")))
             end
-            if not found then print("(no known devices)") end
+            if not found then outWrite("(no known devices)", colors.gray) end
         elseif cmd == "alarm" or cmd == "panic" then
             setAlarm((parts[2] or "on"):lower() ~= "off")
         elseif cmd == "help" then
-            print("Commands: unlock | lock | list | <id> on|off|toggle | alarm [on|off] | clear | exit")
+            outWrite("Commands: unlock | lock | list | <id> on|off|toggle | alarm [on|off] | clear | exit", colors.yellow)
         else
             local st = statuses[cmd]
             if not st then
-                print("Unknown command or device: " .. cmd)
+                outWrite("Unknown command or device: " .. cmd, colors.red)
                 return
             end
             local target = (parts[2] or "toggle"):lower()
@@ -485,10 +530,14 @@ local function runControl()
             end
             rednet.send(st.senderId, { room = cmd, cmd = st.cmd or "light", state = state }, "bunker_cmd")
             audit("cmd " .. cmd .. " " .. target)
-            print(cmd .. " -> " .. (state and "ON" or "OFF"))
+            outWrite(cmd .. " -> " .. (state and "ON" or "OFF"), colors.green)
         end
     end
 
+    -- initial console screen (header comes from the buffer, not prints)
+    outWrite("=== MAMDANI OS ===", colors.cyan)
+    outWrite("Console locked - type `unlock` to enable commands.", colors.gray)
+    renderOut()
     drawPrompt()
     local updateTimer = os.startTimer(UPDATE_INTERVAL)
 
@@ -539,12 +588,7 @@ local function runControl()
                 pushHistory(line)
                 -- echo the executed line with the prefix (terminal style)
                 if line ~= "" then
-                    local _, th = term.getSize()
-                    term.setCursorPos(1, th)
-                    term.clearLine()
-                    term.setTextColor(locked and colors.red or colors.cyan)
-                    print((locked and PROMPT_LOCKED or PROMPT) .. line)
-                    term.setTextColor(colors.white)
+                    outWrite((locked and PROMPT_LOCKED or PROMPT) .. line, locked and colors.red or colors.cyan)
                 end
                 runCommand(line)
                 cmdLine = ""
@@ -571,6 +615,16 @@ local function runControl()
                     resetComp()
                     drawPrompt()
                 end
+            elseif p1 == keys.pageup then
+                local th = term.getSize()
+                local view = th - 1
+                scroll = math.min(scroll + math.ceil(view / 2), math.max(0, #outState - view))
+                renderOut()
+            elseif p1 == keys.pagedown then
+                local th = term.getSize()
+                local view = th - 1
+                scroll = math.max(0, scroll - math.ceil(view / 2))
+                renderOut()
             elseif p1 == keys.backspace then
                 cmdLine = string.sub(cmdLine, 1, #cmdLine - 1)
                 resetComp()
