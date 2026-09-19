@@ -26,6 +26,7 @@ local rooms = {
 
 local aux = {
     { id = "me-corridor-1", name = "ME Corridor 1" },
+    { id = "me-corridor-2", name = "ME Corridor 2" },
     { id = "maschine-corridor-1", name = "Maschine Corridor 1" },
     { id = "control-corridor-1",  name = "CR Corridor 1"}
 }

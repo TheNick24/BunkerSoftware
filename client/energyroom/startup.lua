@@ -23,6 +23,7 @@ local UPDATE_INTERVAL = 5 -- status heartbeat (plain on/off goes out instantly)
 local DEVICES = {
     { id = "maschine-room", cmd = "light", driver = "relay", relay = "redstone_relay_14", side = "top" },
     { id = "maschine-corridor-1", cmd = "light", driver = "relay", relay = "redstone_relay_14", side = "left" },
+    { id = "me-corridor-2", cmd = "light", driver = "relay", relay = "redstone_relay_14", side = "right" }
 }
 
 -- ============ START ============
