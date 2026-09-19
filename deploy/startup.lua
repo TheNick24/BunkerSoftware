@@ -112,8 +112,7 @@ local function readFile(path)
 end
 
 local function waitForAck(id, dest)
-    -- waits for the ack of ONE file; prints any other bunker_deploy message
-    -- that arrives while waiting (diagnostics for the return path)
+    -- waits for the ack of ONE file (ignores everything else silently)
     local deadline = os.startTimer(ACK_TIMEOUT)
     while true do
         local e, p1, p2, p3 = os.pullEvent()
@@ -121,25 +120,25 @@ local function waitForAck(id, dest)
             if p1 == id and type(p2) == "table" and p2.action == "ack" and p2.file == dest then
                 return true
             end
-            term.setTextColor(colors.yellow)
-            print("   ? drop: " .. tostring(p1) .. " = " .. tostring(type(p2) == "table" and (p2.action or "?") or p2))
-            term.setTextColor(colors.white)
         elseif e == "timer" and p1 == deadline then
             return false
         end
     end
 end
 
-local function sendFile(id, dest, data)
+local function sendChunks(id, dest, data)
     local total = math.max(1, math.ceil(#data / CHUNK_SIZE))
+    for i = 1, total do
+        local chunk = string.sub(data, (i - 1) * CHUNK_SIZE + 1, i * CHUNK_SIZE)
+        rednet.send(id, { action = "file", file = dest, index = i, total = total, chunk = chunk }, "bunker_deploy")
+        os.sleep(SEND_GAP)
+    end
+end
+
+local function sendFile(id, dest, data)
     for attempt = 1, MAX_ATTEMPTS do
-        for i = 1, total do
-            local chunk = string.sub(data, (i - 1) * CHUNK_SIZE + 1, i * CHUNK_SIZE)
-            rednet.send(id, { action = "file", file = dest, index = i, total = total, chunk = chunk }, "bunker_deploy")
-            os.sleep(SEND_GAP)
-        end
+        sendChunks(id, dest, data)
         if waitForAck(id, dest) then
-            print("   + ack " .. dest)
             return "ack"
         end
     end
@@ -164,25 +163,29 @@ local function deployRole(id, role)
         return false, false
     end
     local self = (id == os.getComputerID())
+    local ok, noAckPath = true, false
+    local acked = false
+    local sent = 0
     print("-> computer " .. id .. " (" .. role .. (self and ", this computer" or "") .. ")")
-    local ok, unconfirmed = true, false
     local function push(dest, data)
-        local res
         if not data then
             ok = false
             return
         elseif self then
             localWrite(dest, data)
-            print("   " .. dest .. " (local)")
-            return
+            sent = sent + 1
+        elseif noAckPath then
+            -- acks cannot return on this target: fire & forget, fast
+            sendChunks(id, dest, data)
+            sent = sent + 1
         else
-            res = sendFile(id, dest, data)
+            local res = sendFile(id, dest, data)
             if res == "ack" then
-                print("   " .. dest .. " (" .. #data .. " b)")
+                acked = true
             else
-                unconfirmed = true
-                print("   ! " .. dest .. " - NO ACK (sent " .. MAX_ATTEMPTS .. "x, no confirmation)")
+                noAckPath = true
             end
+            sent = sent + 1
         end
     end
     for _, f in ipairs(SHARED) do
@@ -196,12 +199,12 @@ local function deployRole(id, role)
     if ok and REBOOT_AFTER and not self then
         rednet.send(id, { action = "reboot" }, "bunker_deploy")
         os.sleep(0.5)
-        print("   reboot")
     end
-    if ok and unconfirmed then
-        print("   (target reached - no acks received, files sent " .. MAX_ATTEMPTS .. "x)")
+    print("   " .. sent .. " file(s)")
+    if noAckPath then
+        print("   (no acks - files sent, rebooting anyway)")
     end
-    return ok, unconfirmed
+    return ok, noAckPath
 end
 
 local function listTargets()
