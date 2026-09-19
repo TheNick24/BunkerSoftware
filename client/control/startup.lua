@@ -28,7 +28,8 @@ local INSIDE_MONITOR  = "monitor_10" -- inside button (no PIN needed)
 local DEVICES = {
     { id = "control",            cmd = "light", driver = "relay",    relay = "redstone_relay_9",  side = "top" },
     { id = "control-corridor-1", cmd = "light", driver = "relay",    relay = "redstone_relay_9",  side = "right" },
-    { id = "control-door",       cmd = "door",  driver = "door",     peripheral = "redstone_relay_10", side = "left" },
+    { id = "control-door",       cmd = "door",  driver = "door",  peripheral = "redstone_relay_10", side = "left" },
+    { id = "server-door", cmd = "door", driver = "door", peripheral = "redstone_relay_13", side = "front" },
 }
 
 local DOOR_DEVICE = DEVICES[3]
