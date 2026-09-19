@@ -6,9 +6,11 @@
 -- this file). Every target computer must be running deploy/receiver.lua.
 --
 -- Usage:
---   deploy            deploy to ALL targets
---   deploy <role>     deploy only to the targets of that role
+--   deploy            deploy to ALL targets over rednet (push, fallback)
+--   deploy <role>     deploy only to the targets of that role (push)
 --   deploy update     refresh this deployer from GitHub over HTTP (no wget)
+--   deploy refresh    tell all targets to self-update over HTTP (no data on
+--                     rednet, each target pulls from GitHub and reboots)
 --   deploy targets    print the known targets
 -- ============================================
 
@@ -302,6 +304,24 @@ if not modem then
     return
 end
 print("Modem: " .. modem)
+
+-- `deploy refresh [role]` sends a rednet UPDATE trigger to the targets. Each
+-- target pulls its own files over HTTP from GitHub (fast, no data over
+-- rednet) and reboots. The classic `deploy` (rednet push) still exists for
+-- fallback / LAN use.
+if args[1] == "refresh" then
+    local filter = args[2]
+    local sent = 0
+    for id, role in pairs(TARGETS) do
+        if matchesRole(id, role, filter) then
+            rednet.send(id, { action = "update" }, "bunker_deploy")
+            sent = sent + 1
+        end
+    end
+    print("Sent " .. sent .. " update trigger(s) over rednet.")
+    print("Each target pulls its files itself over HTTP and reboots.")
+    return
+end
 
 local filter = args[1]
 local updated, failed, unconfirmed = 0, 0, 0

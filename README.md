@@ -185,10 +185,36 @@ If `remote` finds nothing, run `remote watch` first: it prints every message
 that arrives at the pocket computer, so you can tell whether the problem is
 wireless range/modem (no output) or something else.
 
-## Automatic deployment (rednet)
+## Deploying updates
 
-Instead of visiting every computer, you can push the current files to all of
-them from a single computer over rednet:
+There are two ways to get new files onto the target computers.
+
+### A. Self-updating clients (recommended)
+
+Every target pulls its own files over HTTP directly from GitHub - rednet is
+only used to *trigger* the refresh, the data never travels over wireless.
+
+1. **Bootstrap once per computer** with the room role:
+   `wget run <BASE_URL>/tools/install.lua client entrance`
+   (roles: `controlroom`, `control`, `entrance`, `meroom`, `distributor`,
+   `maschineroom`). It installs the flat library bundle, the room's `main.lua`,
+   a `receiver.lua`, a generated `startup.lua` launcher and an `update.lua`.
+2. Reboot the computer.
+3. The launcher now pulls the newest files over HTTP on **every boot** and then
+   starts `main.lua` (a failed pull never blocks the room, old files stay).
+   When GitHub is unreachable nothing breaks.
+4. Manual refresh from the admin computer, without touching the target:
+   `deploy refresh` (or `deploy refresh <role>`). It sends a tiny rednet
+   `update` trigger; the target's receiver runs `update.lua`, which pulls the
+   newest files over HTTP and reboots. You can also just type `update` in the
+   target's shell.
+
+A one-time ID->role setup is still needed for `deploy refresh` (the `TARGETS`
+table in `deploy/startup.lua`).
+
+### B. Classic rednet push (fallback / LAN)
+
+If HTTP is not available, the original push still works:
 
 1. **Admin computer** (any computer with a modem, e.g. the control room):
    copy the whole repo next to `deploy/startup.lua` - either by file access,
@@ -210,9 +236,11 @@ first with `deploy update` (does the old `wget run .../tools/install.lua`
 remotely) - you don't have to type the wget URL anymore.
 
 ```
-deploy            deploy to all targets
-deploy <role>     deploy only to the targets of a role (controlroom, control, entrance, ...)
+deploy            deploy to all targets over rednet (push, fallback)
+deploy <role>     deploy only to the targets of a role (push)
 deploy update     refresh the admin's local repo mirror from GitHub over HTTP
+deploy refresh    tell all targets to self-update over HTTP (rednet is only the
+                  trigger - the data comes from GitHub directly)
 deploy targets    show the configured targets
 ```
 

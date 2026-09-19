@@ -13,6 +13,10 @@
 --   admin -> receiver:  { action="file", file, index, total, chunk }  "bunker_deploy"
 --   receiver -> admin:  { action="ack",  file }                       "bunker_deploy"
 --   admin -> receiver:  { action="reboot" }                           "bunker_deploy"
+--   admin -> receiver:  { action="update" }                           "bunker_deploy"
+--                         -> receiver runs update.lua: pulls the newest
+--                            files over HTTP from GitHub, then reboots
+--                            (the actual data never travels over rednet).
 -- ============================================
 
 local function openModem()
@@ -87,6 +91,20 @@ while true do
             term.setTextColor(colors.white)
             os.sleep(0.5)
             os.reboot()
+        elseif m.action == "update" then
+            -- manual update trigger: the DATA goes over HTTP from GitHub,
+            -- rednet only says "please update now".
+            term.setTextColor(colors.yellow)
+            print("UPDATE triggered - pulling from GitHub ...")
+            term.setTextColor(colors.white)
+            if type(senderId) == "number" then
+                rednet.send(senderId, { action = "ack", file = "update" }, "bunker_deploy")
+            end
+            if fs.exists("update.lua") then
+                shell.run("update.lua")
+            else
+                os.reboot()
+            end
         end
     end
 end
