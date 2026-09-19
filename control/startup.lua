@@ -15,6 +15,13 @@ local bunkerlib = require("bunkerlib")
 local HASH_FILE = "bunker.hash"
 local UPDATE_INTERVAL = 2
 
+-- The room itself always runs (lights, monitors, status) - only the command
+-- console needs the password. It starts LOCKED and re-locks after inactivity.
+local LOCK_AFTER_IDLE = 300   -- seconds of idle until the console locks again
+local MAX_FAILED      = 5     -- failed unlock attempts until a lockout
+local LOCKOUT_SECONDS = 60    -- lockout after too many failed attempts
+local AUDIT_LOG       = "bunker.audit.log"
+
 -- Device groups. Rooms are regular rooms, special groups are NOT part of
 -- a room (corridor lamps, doors, ...). Each entry needs a unique `id`.
 local rooms = {
@@ -79,6 +86,18 @@ local function saveHash(hash)
     f.close()
 end
 
+-- ============ AUDIT LOG ============
+-- Appends one timestamped line per security-relevant event (login attempts,
+-- lock/unlock, blocked commands, alarms). Read the log with:
+--   edit bunker.audit.log        (or: type bunker.audit.log)
+local function audit(entry)
+    local f = fs.open(AUDIT_LOG, "a")
+    if f then
+        f.write(os.date("%Y-%m-%d %H:%M:%S") .. "  " .. entry .. "\n")
+        f.close()
+    end
+end
+
 -- ============ SETUP ============
 local function runSetup()
     term.clear()
@@ -126,20 +145,9 @@ local function runControl()
 
     term.setTextColor(colors.cyan)
     print("=== MAMDANI OS ===")
+    term.setTextColor(colors.gray)
+    print("Console locked - type `unlock` then the password.")
     term.setTextColor(colors.white)
-    while true do
-        print("Password:")
-        term.setTextColor(colors.gray)
-        local input = read("*")
-        if bunkerlib.verifyPassword(input, expected) then
-            break
-        end
-        term.setTextColor(colors.red)
-        print("Wrong password - try again.")
-        term.setTextColor(colors.white)
-    end
-    term.setTextColor(colors.green)
-    print("Access granted!")
 
     local modem = bunkerlib.findModem()
     if not modem then
@@ -164,7 +172,7 @@ local function runControl()
     term.setTextColor(colors.cyan)
     print("=== MAMDANI OS ===")
     term.setTextColor(colors.gray)
-    print("Type a device id + on/off/toggle, 'alarm', 'list' or 'exit'.")
+    print("Console locked - type `unlock` to enable commands.")
 
     local function countEntries(panel)
         if panel.sections then
@@ -240,6 +248,7 @@ local function runControl()
     -- ---- alarm control (shared by alarm button + console) ----
     local function setAlarm(on)
         alarm = on
+        audit("alarm " .. (on and "ON" or "OFF"))
         local n = bunkerlib.emergencyDoors(statuses, on)
         drawMonitors()
         if on then
@@ -253,17 +262,69 @@ local function runControl()
     end
 
     -- ---- command console (type device commands directly) ----
+    -- Starts LOCKED: the room runs (monitors stay alive) but only `unlock`
+    -- plus the correct password enables commands. Auto-locks again after
+    -- LOCK_AFTER_IDLE seconds. Brute force protection: MAX_FAILED wrong
+    -- attempts -> LOCKOUT_SECONDS pause. Everything is written to the
+    -- audit log.
     local cmdLine = ""
     local running = true
+
+    local locked = true
+    local failed = 0
+    local lockedUntil = 0
+    local lockTimer = os.startTimer(LOCK_AFTER_IDLE)
+
+    local function resetLockTimer()
+        if lockTimer then os.cancelTimer(lockTimer) end
+        lockTimer = os.startTimer(LOCK_AFTER_IDLE)
+    end
 
     local function drawPrompt()
         local _, th = term.getSize()
         term.setCursorPos(1, th)
         term.setBackgroundColor(colors.black)
         term.clearLine()
-        term.setTextColor(colors.cyan)
-        term.write("> " .. cmdLine)
+        term.setTextColor(locked and colors.red or colors.cyan)
+        term.write((locked and "LOCKED > " or "> ") .. cmdLine)
         term.setTextColor(colors.white)
+    end
+
+    local function lockConsole(reason)
+        locked = true
+        audit("lock: " .. reason)
+        print("Console locked" .. (reason ~= "" and (" (" .. reason .. ")") or "") .. ".")
+        drawPrompt()
+    end
+
+    local function doUnlock()
+        if os.time() < lockedUntil then
+            print("Locked out - try again in " .. (lockedUntil - os.time()) .. "s.")
+            return
+        end
+        local _, th = term.getSize()
+        term.setCursorPos(1, th)
+        term.clearLine()
+        term.setTextColor(colors.white)
+        term.write("Password: ")
+        local input = read("*")
+        if bunkerlib.verifyPassword(input, expected) then
+            locked = false
+            failed = 0
+            audit("unlock OK")
+            print("Access granted.")
+            resetLockTimer()
+        else
+            failed = failed + 1
+            audit("unlock FAILED (" .. failed .. "x)")
+            if failed >= MAX_FAILED then
+                lockedUntil = os.time() + LOCKOUT_SECONDS
+                failed = 0
+                print("Too many failed attempts - locked out for " .. LOCKOUT_SECONDS .. "s.")
+            else
+                print("Wrong password - " .. (MAX_FAILED - failed) .. " attempt(s) left.")
+            end
+        end
     end
 
     local function runCommand(line)
@@ -272,9 +333,21 @@ local function runControl()
         if #parts == 0 then return end
         local cmd = parts[1]:lower()
 
+        if locked then
+            if cmd == "unlock" then
+                doUnlock()
+            else
+                audit("blocked while locked: " .. cmd)
+                print("Console locked - type `unlock` first.")
+            end
+            return
+        end
+
         if cmd == "exit" then
             print("Bye.")
             running = false
+        elseif cmd == "lock" then
+            lockConsole("manual")
         elseif cmd == "list" or cmd == "status" or cmd == "s" then
             local found = false
             for id, s in pairs(statuses) do
@@ -285,7 +358,7 @@ local function runControl()
         elseif cmd == "alarm" or cmd == "panic" then
             setAlarm((parts[2] or "on"):lower() ~= "off")
         elseif cmd == "help" then
-            print("Commands: list | <id> on|off|toggle | alarm [on|off] | exit")
+            print("Commands: unlock | lock | list | <id> on|off|toggle | alarm [on|off] | exit")
         else
             local st = statuses[cmd]
             if not st then
@@ -302,6 +375,7 @@ local function runControl()
                 state = not st.state
             end
             rednet.send(st.senderId, { room = cmd, cmd = st.cmd or "light", state = state }, "bunker_cmd")
+            audit("cmd " .. cmd .. " " .. target)
             print(cmd .. " -> " .. (state and "ON" or "OFF"))
         end
     end
@@ -315,6 +389,10 @@ local function runControl()
         if event == "timer" and p1 == updateTimer then
             drawMonitors()
             updateTimer = os.startTimer(UPDATE_INTERVAL)
+        elseif event == "timer" and p1 == lockTimer then
+            if not locked then
+                lockConsole("idle " .. LOCK_AFTER_IDLE .. "s")
+            end
         elseif event == "monitor_touch" then
             local btns = buttons[p1]
             if btns and btns[p3] then
@@ -340,9 +418,11 @@ local function runControl()
                 drawMonitors()
             end
         elseif event == "char" then
+            if not locked then resetLockTimer() end
             cmdLine = cmdLine .. p1
             drawPrompt()
         elseif event == "key" then
+            if not locked then resetLockTimer() end
             if p1 == keys.enter then
                 cmdLine = cmdLine:match("^%s*(.-)%s*$") or ""
                 runCommand(cmdLine)
