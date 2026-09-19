@@ -54,6 +54,10 @@ local MONITOR_PANELS = {
     } },
 }
 
+-- Dedicated monitor that ONLY shows a big tappable ALARM button
+-- (tap = start/stop the emergency, same as the `alarm` console command).
+local ALARM_BUTTON_MONITOR = "monitor_13"
+
 -- ============ HASH ============
 local function loadHash()
     if fs.exists(HASH_FILE) then
@@ -171,40 +175,65 @@ local function runControl()
         buttons = {}
         for _, mon in ipairs(monitors) do
             local panel = MONITOR_PANELS[mon.name]
-            bunkerlib.drawHeader(mon.mon)
-            local n, lastRow
-            if panel and countEntries(panel) > 0 then
-                local btns = {}
-                buttons[mon.name] = btns
-                local total = countEntries(panel)
-                n, lastRow = bunkerlib.drawPanel(mon.mon, panel, statuses, btns, true)
-                bunkerlib.drawFooter(mon.mon, lastRow - 5, panel.title, "CLIENTS: " .. n .. "/" .. total)
+            if mon.name == ALARM_BUTTON_MONITOR then
+                -- dedicated monitor: big tappable ALARM button
+                local w, h = mon.mon.getSize()
+                mon.mon.setBackgroundColor(colors.black)
+                mon.mon.setCursorPos(1, 1)
+                mon.mon.clear()
+                local bw = math.max(3, w - 2)
+                local bh = math.max(2, h - 2)
+                local bx = math.max(1, math.floor((w - bw) / 2) + 1)
+                local by = math.max(1, math.floor((h - bh) / 2) + 1)
+                local bg = alarm and colors.red or colors.orange
+                for i = 0, bh - 1 do
+                    mon.mon.setCursorPos(bx, by + i)
+                    mon.mon.setBackgroundColor(bg)
+                    mon.mon.write(string.rep(" ", bw))
+                end
+                local label = alarm and "STOP ALARM" or "ALARM"
+                if #label > bw then label = string.sub(label, 1, bw) end
+                mon.mon.setCursorPos(bx + math.max(0, math.floor((bw - #label) / 2)), by + math.floor(bh / 2))
+                mon.mon.setTextColor(colors.white)
+                mon.mon.write(label)
+                mon.mon.setBackgroundColor(colors.black)
+                local bts = {}
+                buttons[mon.name] = bts
+                for i = by, by + bh - 1 do bts[i] = { id = "__ALARM__" } end
             else
-                n, lastRow = 0, 3
-                bunkerlib.drawInfoPlaceholder(mon.mon)
-                bunkerlib.drawFooter(mon.mon, 3, "INFO DISPLAY")
+                bunkerlib.drawHeader(mon.mon)
+                local n, lastRow
+                if panel and countEntries(panel) > 0 then
+                    local btns = {}
+                    buttons[mon.name] = btns
+                    local total = countEntries(panel)
+                    n, lastRow = bunkerlib.drawPanel(mon.mon, panel, statuses, btns, true)
+                    bunkerlib.drawFooter(mon.mon, lastRow - 5, panel.title, "CLIENTS: " .. n .. "/" .. total)
+                else
+                    n, lastRow = 0, 3
+                    bunkerlib.drawInfoPlaceholder(mon.mon)
+                    bunkerlib.drawFooter(mon.mon, 3, "INFO DISPLAY")
+                end
+                if alarm then
+                    -- red alarm banner across the footer line of every monitor
+                    local w, h = mon.mon.getSize()
+                    local rows = panel and countEntries(panel) > 0 and (lastRow - 5) or 3
+                    local y = math.max(h - 1, 5 + rows + 2)
+                    mon.mon.setBackgroundColor(colors.red)
+                    mon.mon.setTextColor(colors.white)
+                    mon.mon.setCursorPos(1, y)
+                    mon.mon.clearLine()
+                    mon.mon.setCursorPos(1, y)
+                    mon.mon.write("!! ALARM !!")
+                    mon.mon.setBackgroundColor(colors.black)
+                end
             end
-            -- ALARM button in the footer line of every monitor
-            local w, h = mon.mon.getSize()
-            local rows = panel and countEntries(panel) > 0 and (lastRow - 5) or 3
-            local y = math.max(h - 1, 5 + rows + 2)
-            local label = alarm and " !! ALARM !! " or " [ ALARM ] "
-            label = string.sub(label, 1, w)
-            local x = w - #label + 1
-            mon.mon.setCursorPos(x, y)
-            mon.mon.setBackgroundColor(alarm and colors.red or colors.orange)
-            mon.mon.setTextColor(colors.white)
-            mon.mon.write(label)
-            mon.mon.setBackgroundColor(colors.black)
-            local alm = buttons[mon.name] or {}
-            buttons[mon.name] = alm
-            alm[y] = { id = "__ALARM__" }
         end
     end
 
     drawMonitors()
 
-    -- ---- alarm control (shared by footer button + console) ----
+    -- ---- alarm control (shared by alarm button + console) ----
     local function setAlarm(on)
         alarm = on
         local n = bunkerlib.emergencyDoors(statuses, on)

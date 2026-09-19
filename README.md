@@ -140,8 +140,9 @@ run `control setup` in the control room.
   - `alarm off` - reopens all safety doors (ends the emergency)
   - `list` - show all known device states
   - `help`, `exit`
-  While an alarm is active every monitor shows a red `!! ALARM !!` button in
-  the footer; tap it to start/stop the alarm without the terminal.
+  While an alarm is active every monitor shows a red `!! ALARM !!` banner.
+  The dedicated `monitor_13` shows a big tappable `ALARM` button instead;
+  tap it to start/stop the emergency without the terminal.
   The control room learns each device's `cmd` type from the status broadcasts,
   so the console works for lights, doors and safety doors alike.
 
