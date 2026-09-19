@@ -12,8 +12,10 @@
 --   interval  = status broadcast interval (seconds)
 --   devices   = { { id, cmd = "light", driver = "relay"|"redstone"|"door"|"safety-door",
 --                   relay?, peripheral?, side }, ... }
+local lib
+
 local function runClient(conf)
-    local modem = bunkerlib.findModem(conf.modemSide)
+    local modem = lib.findModem(conf.modemSide)
     if not modem then
         term.setTextColor(colors.red)
         print("No modem found!")
@@ -25,7 +27,7 @@ local function runClient(conf)
         devices[#devices + 1] = {
             id = d.id,
             cmd = d.cmd or "light",
-            driver = bunkerlib.driver(d.driver),
+            driver = lib.driver(d.driver),
             conf = d,
         }
     end
@@ -43,7 +45,7 @@ local function runClient(conf)
     local function set(dev, state)
         local ok, res = pcall(dev.driver.set, dev.conf, state)
         if not ok then
-            bunkerlib.printOnce(errs, dev.id, dev.driver.name .. " error (" .. dev.id .. "): " .. tostring(res))
+lib.printOnce(errs, dev.id, dev.driver.name .. " error (" .. dev.id .. "): " .. tostring(res))
         end
     end
 
@@ -102,5 +104,6 @@ local function runClient(conf)
 end
 
 return function(bunkerlib)
+    lib = bunkerlib
     bunkerlib.runClient = runClient
 end

@@ -8,6 +8,11 @@
 --
 -- Copy this file once to each computer (floppy, Pastebin, or manually)
 -- and run:  receiver
+--
+-- Protocol (with deploy/startup.lua):
+--   admin -> receiver:  { action="file", file, index, total, chunk }  "bunker_deploy"
+--   receiver -> admin:  { action="ack",  file }                       "bunker_deploy"
+--   admin -> receiver:  { action="reboot" }                           "bunker_deploy"
 -- ============================================
 
 local function openModem()
@@ -44,12 +49,12 @@ print("Waiting for deploy...")
 local buffers = {}
 
 while true do
-    local e, _, p2, p3 = os.pullEvent()
+    local e, senderId, p2, p3 = os.pullEvent()
     if e == "rednet_message" and p3 == "bunker_deploy" and type(p2) == "table" then
         local m = p2
         if m.action == "file" and m.file and m.chunk and m.index then
             local b = buffers[m.file]
-            if not b then
+            if not b or b.total ~= m.total then
                 b = { data = {}, received = 0, total = m.total or 1 }
                 buffers[m.file] = b
             end
@@ -69,6 +74,12 @@ while true do
                 term.setTextColor(colors.green)
                 print("saved " .. m.file .. " (" .. b.total .. " chunk(s))")
                 term.setTextColor(colors.white)
+                if type(senderId) == "number" then
+                    rednet.send(senderId, { action = "ack", file = m.file }, "bunker_deploy")
+                    term.setTextColor(colors.yellow)
+                    print("ack " .. m.file)
+                    term.setTextColor(colors.white)
+                end
             end
         elseif m.action == "reboot" then
             term.setTextColor(colors.yellow)

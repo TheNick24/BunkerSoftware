@@ -14,6 +14,9 @@
 local args = { ... }
 
 local CHUNK_SIZE = 16000
+local MAX_ATTEMPTS = 4 -- resend a file until it is acknowledged
+local ACK_TIMEOUT = 2 -- seconds to wait for the file ack from the target
+local SEND_GAP = 0.05 -- pause between chunks so the modem can keep up
 local REBOOT_AFTER = true -- restart every target after a successful deploy
 
 -- Which files EVERY target gets.
@@ -37,11 +40,14 @@ local SHARED = {
 -- true` additionally writes a startup.lua that starts the receiver together
 -- with the main program, so the target can be updated again after a reboot.
 local ROLES = {
-    control     = { src = "control/startup.lua",            dest = "main.lua", launcher = true },
+    -- ControlRoom (monitor panels + alarm UI, the screens)
+    controlroom = { src = "control/startup.lua",            dest = "main.lua", launcher = true },
     entrance    = { src = "client/entrance/startup.lua",    dest = "main.lua", launcher = true },
     meroom      = { src = "client/meroom/startup.lua",      dest = "main.lua", launcher = true },
     distributor = { src = "client/distributor1/startup.lua", dest = "main.lua", launcher = true },
-    keypad      = { src = "client/control/startup.lua",     dest = "main.lua", launcher = true },
+    -- Control = the separate door-keypad computer (NOT ControlRoom). The
+    -- keypad / inside monitors hang off this computer.
+    control     = { src = "client/control/startup.lua",     dest = "main.lua", launcher = true },
     -- pocket computers: no launcher (interactive tool), the files are pushed
     -- but the pocket keeps running `remote` manually
     remote      = { src = "remote/startup.lua",             dest = "remote.lua", launcher = false },
@@ -51,7 +57,7 @@ local ROLES = {
 -- IDs on the screens of the running receivers, with `id`, or via
 -- `remote list` (the CLIENT column shows the numeric computer id).
 local TARGETS = {
-   [10] = "controlroom",    -- ControlRoom: the monitor panels + alarm UI
+    [10] = "controlroom",    -- ControlRoom: the monitor panels + alarm UI
     [12] = "control",        -- Control: separate door-keypad computer (door + its monitors)
     [28] = "entrance",       -- Entrance room client
     [27] = "meroom",         -- ME-Core room client
@@ -64,7 +70,7 @@ local LAUNCHER = [[
 -- Runs the MAIN program together with the deploy receiver, so this
 -- computer can always be updated remotely.
 local arg = { ... }
-parallel.waitForEach(
+parallel.waitForAll(
     function()
         if fs.exists("receiver.lua") then
             shell.run("receiver.lua")
@@ -105,41 +111,100 @@ local function readFile(path)
     return data
 end
 
-local function sendFile(id, dest, data)
+local function waitForAck(id, dest)
+    -- waits for the ack of ONE file (ignores everything else silently)
+    local deadline = os.startTimer(ACK_TIMEOUT)
+    while true do
+        local e, p1, p2, p3 = os.pullEvent()
+        if e == "rednet_message" and p3 == "bunker_deploy" then
+            if p1 == id and type(p2) == "table" and p2.action == "ack" and p2.file == dest then
+                return true
+            end
+        elseif e == "timer" and p1 == deadline then
+            return false
+        end
+    end
+end
+
+local function sendChunks(id, dest, data)
     local total = math.max(1, math.ceil(#data / CHUNK_SIZE))
     for i = 1, total do
         local chunk = string.sub(data, (i - 1) * CHUNK_SIZE + 1, i * CHUNK_SIZE)
         rednet.send(id, { action = "file", file = dest, index = i, total = total, chunk = chunk }, "bunker_deploy")
+        os.sleep(SEND_GAP)
     end
+end
+
+local function sendFile(id, dest, data)
+    for attempt = 1, MAX_ATTEMPTS do
+        sendChunks(id, dest, data)
+        if waitForAck(id, dest) then
+            return "ack"
+        end
+    end
+    return "noack"
+end
+
+local function localWrite(dest, data)
+    -- self-update: copy the file directly on this computer (no network)
+    local d = fs.getDir(dest)
+    if d ~= "" and not fs.exists(d) then
+        fs.makeDir(d)
+    end
+    local f = fs.open(dest, "w")
+    f.write(data)
+    f.close()
 end
 
 local function deployRole(id, role)
     local cfg = ROLES[role]
     if not cfg then
         print("  ! unknown role: " .. role)
-        return
+        return false, false
     end
-    print("-> computer " .. id .. " (" .. role .. ")")
-    for _, f in ipairs(SHARED) do
-        local data = readFile(f.src)
-        if data then
-            sendFile(id, f.dest, data)
-            print("   " .. f.dest .. " (" .. #data .. " b)")
+    local self = (id == os.getComputerID())
+    local ok, noAckPath = true, false
+    local acked = false
+    local sent = 0
+    print("-> computer " .. id .. " (" .. role .. (self and ", this computer" or "") .. ")")
+    local function push(dest, data)
+        if not data then
+            ok = false
+            return
+        elseif self then
+            localWrite(dest, data)
+            sent = sent + 1
+        elseif noAckPath then
+            -- acks cannot return on this target: fire & forget, fast
+            sendChunks(id, dest, data)
+            sent = sent + 1
+        else
+            local res = sendFile(id, dest, data)
+            if res == "ack" then
+                acked = true
+            else
+                noAckPath = true
+            end
+            sent = sent + 1
         end
     end
-    local data = readFile(cfg.src)
-    if data then
-        sendFile(id, cfg.dest, data)
-        print("   " .. cfg.dest .. " (" .. #data .. " b)")
+    for _, f in ipairs(SHARED) do
+        local data = readFile(f.src)
+        push(f.dest, data)
     end
+    push(cfg.dest, readFile(cfg.src))
     if cfg.launcher then
-        sendFile(id, "startup.lua", LAUNCHER)
-        print("   startup.lua (launcher)")
+        push("startup.lua", LAUNCHER)
     end
-    if REBOOT_AFTER and id ~= os.getComputerID() then
+    if ok and REBOOT_AFTER and not self then
         rednet.send(id, { action = "reboot" }, "bunker_deploy")
-        print("   reboot")
+        os.sleep(0.5)
     end
+    print("   " .. sent .. " file(s)")
+    if noAckPath then
+        print("   (no acks - files sent, rebooting anyway)")
+    end
+    return ok, noAckPath
 end
 
 local function listTargets()
@@ -177,22 +242,28 @@ end
 print("Modem: " .. modem)
 
 local filter = args[1]
-local deployed = 0
+local updated, failed, unconfirmed = 0, 0, 0
 for id, role in pairs(TARGETS) do
     if matchesRole(id, role, filter) then
         if type(role) == "table" then
+            local ok, unconf = true, false
             for _, r in ipairs(role) do
-                deployRole(id, r)
+                local o, u = deployRole(id, r)
+                if not o then ok = false end
+                if u then unconf = true end
             end
+            if ok then updated = updated + 1 else failed = failed + 1 end
+            if unconf then unconfirmed = unconfirmed + 1 end
         else
-            deployRole(id, role)
+            local ok, unconf = deployRole(id, role)
+            if ok then updated = updated + 1 else failed = failed + 1 end
+            if unconf then unconfirmed = unconfirmed + 1 end
         end
-        deployed = deployed + 1
     end
 end
 
 print("")
-print("Done. Targets updated: " .. deployed)
-if deployed == 0 then
+print("Done. " .. updated .. " ok, " .. failed .. " failed" .. (unconfirmed > 0 and " (" .. unconfirmed .. " no ack)" or "") .. ".")
+if updated + failed == 0 then
     print("(no targets matched - run `deploy targets` to check the config)")
 end
