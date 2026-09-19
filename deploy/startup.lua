@@ -63,7 +63,7 @@ local TARGETS = {
     [12] = "control",        -- Control: separate door-keypad computer (door + its monitors)
     [28] = "entrance",       -- Entrance room client
     [27] = "meroom",      -- ME-Core room client
-    [25] = "maschine-room",   -- Maschine Room client
+    [25] = "maschineroom",   -- Maschine Room client
     [24] = "distributor",    -- Distributor_1 room client
     [23] = "remote",         -- pocket computer (remote CLI)
 }

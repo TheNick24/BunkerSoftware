@@ -22,7 +22,7 @@ local UPDATE_INTERVAL = 5 -- status heartbeat (plain on/off goes out instantly)
 --   in the control room. `id` must match the control panel's entry.
 local DEVICES = {
     { id = "maschine-room", cmd = "light", driver = "relay", relay = "redstone_relay_14", side = "top" },
-    { id = "maschine-corridor", cmd = "light", driver = "relay", relay = "redstone_relay_14", side = "left" },
+    { id = "maschine-corridor-1", cmd = "light", driver = "relay", relay = "redstone_relay_14", side = "left" },
 }
 
 -- ============ START ============

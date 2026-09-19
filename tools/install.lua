@@ -33,6 +33,7 @@ local ALL_FILES = {
     "client/entrance/startup.lua",
     "client/meroom/startup.lua",
     "client/distributor1/startup.lua",
+    "client/energyroom/startup.lua",
     "client/control/startup.lua",
     "remote/startup.lua",
     "deploy/startup.lua",
