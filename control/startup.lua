@@ -21,6 +21,8 @@ local LOCK_AFTER_IDLE = 300   -- seconds of idle until the console locks again
 local MAX_FAILED      = 5     -- failed unlock attempts until a lockout
 local LOCKOUT_SECONDS = 60    -- lockout after too many failed attempts
 local AUDIT_LOG       = "bunker.audit.log"
+local HISTORY_FILE    = "bunker.history"
+local MAX_HISTORY     = 20
 
 -- Device groups. Rooms are regular rooms, special groups are NOT part of
 -- a room (corridor lamps, doors, ...). Each entry needs a unique `id`.
@@ -96,6 +98,21 @@ local function audit(entry)
         f.write(os.date("%Y-%m-%d %H:%M:%S") .. "  " .. entry .. "\n")
         f.close()
     end
+end
+
+-- ============ SHELL HISTORY (loading) ============
+local function loadHistory()
+    if not fs.exists(HISTORY_FILE) then return {} end
+    local f = fs.open(HISTORY_FILE, "r")
+    if not f then return {} end
+    local h = {}
+    while true do
+        local line = f.readLine()
+        if not line then break end
+        if line ~= "" then h[#h + 1] = line end
+    end
+    f.close()
+    return h
 end
 
 -- ============ SETUP ============
@@ -275,19 +292,101 @@ local function runControl()
     local lockedUntil = 0
     local lockTimer = os.startTimer(LOCK_AFTER_IDLE)
 
-    local function resetLockTimer()
-        if lockTimer then os.cancelTimer(lockTimer) end
-        lockTimer = os.startTimer(LOCK_AFTER_IDLE)
+    -- shell niceties: history (up/down), TAB completion, clean prompt line
+    local history = loadHistory()
+    local histIdx = nil
+    local COMMANDS = { "unlock", "lock", "list", "status", "s", "help", "alarm", "panic", "exit" }
+    local STATES   = { "on", "off", "toggle" }
+    local compToken  = nil -- the (partial) token being completed
+    local compField  = nil -- which token slot we were completing on
+    local compIndex  = 0
+    local PROMPT     = "MAMDANI > "
+    local PROMPT_LOCKED = "MAMDANI LOCKED > "
+
+    local function pushHistory(line)
+        if line ~= "" and line ~= history[#history] then
+            history[#history + 1] = line
+            if #history > MAX_HISTORY then table.remove(history, 1) end
+            local f = fs.open(HISTORY_FILE, "w")
+            if f then
+                for _, l in ipairs(history) do f.writeLine(l) end
+                f.close()
+            end
+        end
+    end
+
+    -- candidates for the token slot being edited (1 = command/device id,
+    -- 2 = state word, >=3 = no completion)
+    local function completeFor(field)
+        if locked then return { "unlock" } end -- locked: only autocomplete unlock
+        if field <= 1 then
+            local res = {}
+            for _, c in ipairs(COMMANDS) do res[#res + 1] = c end
+            for id in pairs(statuses) do res[#res + 1] = id end
+            return res
+        elseif field == 2 then
+            return STATES
+        end
+        return {}
     end
 
     local function drawPrompt()
-        local _, th = term.getSize()
+        local w, th = term.getSize()
+        local prefix = locked and PROMPT_LOCKED or PROMPT
         term.setCursorPos(1, th)
         term.setBackgroundColor(colors.black)
-        term.clearLine()
         term.setTextColor(locked and colors.red or colors.cyan)
-        term.write((locked and "LOCKED > " or "> ") .. cmdLine)
+        term.write(prefix)
         term.setTextColor(colors.white)
+        term.write(cmdLine)
+        -- clear any leftover from a longer previous line so nothing "sticks"
+        local rest = w - #prefix - #cmdLine
+        if rest > 0 then term.write(string.rep(" ", rest)) end
+        term.setCursorPos(1 + #prefix + #cmdLine, th)
+    end
+
+    local function doComplete()
+        local words = {}
+        for w in cmdLine:gmatch("%S+") do words[#words + 1] = w end
+        local endsWithSpace = cmdLine:sub(-1) == " "
+        local field = #words + (endsWithSpace and 1 or 0)
+        if field < 1 then field = 1 end
+        local pref = (not endsWithSpace and words[#words]) or ""
+
+        if compToken ~= pref or compField ~= field then
+            compToken, compField, compIndex = pref, field, 0
+        end
+
+        local matches = {}
+        for _, c in ipairs(completeFor(field)) do
+            if c:sub(1, #pref) == pref then matches[#matches + 1] = c end
+        end
+        if #matches == 0 then return end
+
+        compIndex = (compIndex % #matches) + 1
+        local done = matches[compIndex]
+
+        if endsWithSpace or pref == "" then
+            cmdLine = cmdLine .. done
+        else
+            local lastStart = cmdLine:match(".*%s")
+            lastStart = lastStart and #lastStart + 1 or 1
+            cmdLine = cmdLine:sub(1, lastStart - 1) .. done
+        end
+        -- auto-space on a unique match (only outside the locked prompt)
+        if not locked and #matches == 1 then
+            cmdLine = cmdLine .. " "
+        end
+        drawPrompt()
+    end
+
+    local function resetComp()
+        compToken, compField, compIndex = nil, nil, 0
+    end
+
+    local function resetLockTimer()
+        if lockTimer then os.cancelTimer(lockTimer) end
+        lockTimer = os.startTimer(LOCK_AFTER_IDLE)
     end
 
     local function lockConsole(reason)
@@ -304,10 +403,12 @@ local function runControl()
         end
         local _, th = term.getSize()
         term.setCursorPos(1, th)
+        term.setBackgroundColor(colors.black)
         term.clearLine()
         term.setTextColor(colors.white)
         term.write("Password: ")
         local input = read("*")
+        term.setBackgroundColor(colors.black)
         if bunkerlib.verifyPassword(input, expected) then
             locked = false
             failed = 0
@@ -419,17 +520,43 @@ local function runControl()
             end
         elseif event == "char" then
             if not locked then resetLockTimer() end
+            resetComp()
             cmdLine = cmdLine .. p1
             drawPrompt()
         elseif event == "key" then
             if not locked then resetLockTimer() end
             if p1 == keys.enter then
-                cmdLine = cmdLine:match("^%s*(.-)%s*$") or ""
-                runCommand(cmdLine)
+                local line = cmdLine:match("^%s*(.-)%s*$") or ""
+                resetComp()
+                pushHistory(line)
+                runCommand(line)
                 cmdLine = ""
+                histIdx = nil
                 drawPrompt()
+            elseif p1 == keys.tab then
+                doComplete()
+            elseif p1 == keys.up then
+                if #history > 0 then
+                    histIdx = (histIdx == nil) and #history or math.max(1, histIdx - 1)
+                    cmdLine = history[histIdx] or ""
+                    resetComp()
+                    drawPrompt()
+                end
+            elseif p1 == keys.down then
+                if histIdx then
+                    histIdx = histIdx + 1
+                    if histIdx > #history then
+                        histIdx = nil
+                        cmdLine = ""
+                    else
+                        cmdLine = history[histIdx]
+                    end
+                    resetComp()
+                    drawPrompt()
+                end
             elseif p1 == keys.backspace then
                 cmdLine = string.sub(cmdLine, 1, #cmdLine - 1)
+                resetComp()
                 drawPrompt()
             end
         end
