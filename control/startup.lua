@@ -119,13 +119,16 @@ local function runControl()
     term.setTextColor(colors.cyan)
     print("=== MAMDANI OS ===")
     term.setTextColor(colors.white)
-    print("Password:")
-    term.setTextColor(colors.gray)
-    local input = read("*")
-    if not bunkerlib.verifyPassword(input, expected) then
+    while true do
+        print("Password:")
+        term.setTextColor(colors.gray)
+        local input = read("*")
+        if bunkerlib.verifyPassword(input, expected) then
+            break
+        end
         term.setTextColor(colors.red)
-        print("Wrong password!")
-        return
+        print("Wrong password - try again.")
+        term.setTextColor(colors.white)
     end
     term.setTextColor(colors.green)
     print("Access granted!")
