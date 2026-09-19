@@ -121,6 +121,7 @@ local function sendFile(id, dest, data)
         end
         local sender, msg = rednet.receive("bunker_deploy", ACK_TIMEOUT)
         if sender == id and type(msg) == "table" and msg.action == "ack" and msg.file == dest then
+            print("   + ack " .. dest)
             return true
         end
     end

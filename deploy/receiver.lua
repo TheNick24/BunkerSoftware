@@ -76,6 +76,9 @@ while true do
                 term.setTextColor(colors.white)
                 if type(senderId) == "number" then
                     rednet.send(senderId, { action = "ack", file = m.file }, "bunker_deploy")
+                    term.setTextColor(colors.yellow)
+                    print("ack " .. m.file)
+                    term.setTextColor(colors.white)
                 end
             end
         elseif m.action == "reboot" then
