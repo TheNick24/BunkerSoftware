@@ -29,7 +29,7 @@ local ALL_FILES = {
     "lib/doors.lua",
     "lib/monitor.lua",
     "lib/client.lua",
-    "control/startup.lua",
+"controlserver/startup.lua",
     "client/entrance/startup.lua",
     "client/meroom/startup.lua",
     "client/distributor1/startup.lua",
@@ -64,7 +64,7 @@ local CLIENT_SHARED = {
 
 -- Role -> main program path (mirrors ROLES in deploy/startup.lua).
 local CLIENT_ROLES = {
-    controlroom = "control/startup.lua",
+    controlserver = "controlserver/startup.lua",
     control     = "client/control/startup.lua",
     entrance    = "client/entrance/startup.lua",
     meroom      = "client/meroom/startup.lua",

@@ -13,7 +13,7 @@ Custom operating system / control system for a bunker network in ComputerCraft.
 - `lib/actions.lua` - Generic panel actions (`light`)
 - `lib/monitor.lua` - Monitor rendering (headers, toggle tables, panels, footer)
 - `lib/client.lua` - Room client runtime (`runClient`)
-- `control/startup.lua` - ControlRoom software (control room computer with the monitor panels)
+- `controlserver/startup.lua` - ControlServer software (control room computer with the monitor panels)
 - `client/entrance/startup.lua` - Room client (Entrance) - device control, rednet status
 - `client/meroom/startup.lua` - Room client (ME-Core) - device control, rednet status
 - `client/control/startup.lua` - Door keypad + client on the separate **Control** computer (door devices + keypad/inside monitors)
@@ -63,7 +63,7 @@ the control (or any remote) sends `{ room, cmd, state }` on `bunker_cmd`.
 
 ### Control room
 
-1. Copy `control/startup.lua` as `startup.lua` to the control room computer
+1. Copy `controlserver/startup.lua` as `startup.lua` to the control room computer
 2. Copy `lib/bunkerlib.lua` as `bunkerlib.lua` into the same folder
 3. Adjust the config:
    - `rooms` table (room device IDs + names)
@@ -84,9 +84,10 @@ the control (or any remote) sends `{ room, cmd, state }` on `bunker_cmd`.
      `action` must match the client `cmd`. `header` is the state column
      title. Monitors not listed show an info placeholder. New devices only
      need an entry in a list + one row here.
-4. Run: `control setup`
-5. Enter a password (min. 6 characters)
-6. From now on it autostarts on boot
+4. Start the program. On the first start (no password yet) it prompts
+   **directly inside the running system** for a new password (min. 6
+   characters) - after that the console boots locked. To change the
+   password later, run `control setup` (deployed clients: `main setup`).
 
 ### Room clients
 
@@ -117,8 +118,8 @@ Passwords / PINs are stored as a **salted, stretched PBKDF2-HMAC-SHA256**
 hash (random 16-byte salt, 1000 iterations) with the format
 `pbkdf2$<salt>$<iterations>$<key>` - stored in `bunker.hash` (control room)
 or `door.hash` (door keypad). Old installations with a plain SHA-256 hash
-still verify, but re-running `control setup` / `startup setup` rewrites the
-hash in the new format. The salt makes identical secrets produce different
+still verify, but re-running the password setup (`control setup` / `main
+setup` on deployed clients) rewrites the hash in the new format. The salt makes identical secrets produce different
 stored values and defeats rainbow tables; the iteration count slows brute
 force down.
 
@@ -128,7 +129,7 @@ ComputerCraft computer directory of the world save:
 `saves/<world>/computercraft/computer/<id>/bunker.hash`.
 
 Changing the password requires the **current password**:
-run `control setup` in the control room.
+run `control setup` in the control room (deployed clients: `main setup`).
 
 ## Control room usage
 
@@ -196,7 +197,7 @@ only used to *trigger* the refresh, the data never travels over wireless.
 
 1. **Bootstrap once per computer** with the room role:
    `wget run <BASE_URL>/tools/install.lua client entrance`
-   (roles: `controlroom`, `control`, `entrance`, `meroom`, `distributor`,
+   (roles: `controlserver`, `control`, `entrance`, `meroom`, `distributor`,
    `maschineroom`). It installs the flat library bundle, the room's `main.lua`,
    a `receiver.lua`, a generated `startup.lua` launcher and an `update.lua`.
 2. Reboot the computer.
@@ -264,7 +265,7 @@ wget run <BASE_URL>/tools/install.lua            # admin computer: whole repo
 wget run <BASE_URL>/tools/install.lua receiver   # target bootstrap: receiver only
 ```
 
-The first command puts the full repo layout (`lib/`, `control/`, `client/`,
+The first command puts the full repo layout (`lib/`, `controlserver/`, `client/`,
 `deploy/`, `remote/`) on the admin computer, ready for `deploy`. The second
 puts `receiver.lua` on a target so it can be deployed to. Requires the `http`
 API to be enabled in the CC config.
@@ -283,3 +284,46 @@ API to be enabled in the CC config.
 3. New transport (how it is driven): add a driver in `bunkerlib.DRIVERS`
 4. New behavior (what a button does): add an action in `bunkerlib.ACTIONS`
    and adjust the panel's `action` / device's `cmd`
+
+## Controlplane (operator API + web UI + agents)
+
+`controlplane/` runs *next to* the CC network, outside ComputerCraft (Node.js).
+Every CC computer runs a small agent (`controlplane/agent/agentd.lua`) that
+bootstraps from `GET /agentd.lua`, registers and then long-polls
+`POST /agent/poll`. All agent traffic is signed (HMAC over
+`METHOD\nPATH\nSEQ\nBODY`, strictly-increasing sequence, replay-safe).
+
+- `.env` - operator token, HMAC secret, `COMMAND_ALLOWLIST`, bind host/port
+  (read at startup; a change requires a restart)
+- `node server/index.js` - HTTP server: device ingress + release files on
+  (`127.0.0.1:<PORT>`) signed with HMAC when a tunnel maps them into the CC
+  network; operator API + web UI protected by `x-operator-token`
+- `node mcp/index.js` - MCP server over stdio (`npm run mcp`); exposes the
+  operator API as MCP tools
+- `tools/build-releases.js` (`npm run build`) - builds the `subsystem` bundles
+  from `tools/roles.json`; a deploy publishes `releases/<id>/` + `manifest.json`
+- `tools/install.lua` + `deploy/` - legacy MAMDANI bootstrap/deploy for the
+  CC network (roles: `controlserver`, `control`, `entrance`, `meroom`)
+- `public/` - the operator web UI (device list, commands, release deploy)
+
+Commands (all require `agent.update` to be running the matching `agentd.lua`):
+
+```
+inspect             device info + latest client status
+peripherals         every attached peripheral with type + methods
+                    (monitors: size + text scale) - button in the web UI
+monitor.capture     list monitors / capture a monitor's text
+config.read/write   read/write the agent settings
+log.read            agent log
+reboot              restart the computer (agent plus room program)
+agent.update        pull the newest agentd.lua + reboot
+release.deploy      build + install a release for a role/installation
+release.rollback    switch back to the previous release
+eval_lua            run an arbitrary snippet on the target
+```
+
+To keep the fleet reachable through the operator, run a tunnel into the
+controlplane port (e.g. the local line in `.env` points
+`AGENT_BASE_URL`/`releases` at the public HTTPS URL that maps back to
+`127.0.0.1:<PORT>`), then pair a CC computer with
+`wget run <AGENT_BASE_URL>/agentd.lua <deviceId> <pairingToken>`.

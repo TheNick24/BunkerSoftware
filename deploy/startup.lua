@@ -43,8 +43,8 @@ local SHARED = {
 -- true` additionally writes a startup.lua that starts the receiver together
 -- with the main program, so the target can be updated again after a reboot.
 local ROLES = {
-    -- ControlRoom (monitor panels + alarm UI, the screens)
-    controlroom = { src = "control/startup.lua",            dest = "main.lua", launcher = true },
+    -- ControlServer (monitor panels + alarm UI, the screens)
+    controlserver = { src = "controlserver/startup.lua",            dest = "main.lua", launcher = true },
     entrance    = { src = "client/entrance/startup.lua",    dest = "main.lua", launcher = true },
     meroom      = { src = "client/meroom/startup.lua", dest = "main.lua", launcher = true },
     maschineroom = { src = "client/energyroom/startup.lua", dest = "main.lua", launcher = true },
@@ -61,7 +61,7 @@ local ROLES = {
 -- IDs on the screens of the running receivers, with `id`, or via
 -- `remote list` (the CLIENT column shows the numeric computer id).
 local TARGETS = {
-    [10] = "controlroom",    -- ControlRoom: the monitor panels + alarm UI
+    [10] = "controlserver",    -- ControlServer: the monitor panels + alarm UI
     [12] = "control",        -- Control: separate door-keypad computer (door + its monitors)
     [28] = "entrance",       -- Entrance room client
     [27] = "meroom",      -- ME-Core room client
