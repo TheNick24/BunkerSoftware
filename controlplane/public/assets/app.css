@@ -171,3 +171,25 @@ th { color: var(--dim); font-size: 12px; text-transform: uppercase; letter-spaci
 #toasts > div.ok { border-left-color: var(--ok); }
 .pair-box { background: var(--panel2); border: 1px solid var(--border); border-radius: 4px; padding: 10px; margin-top: 12px; }
 .pair-box .cmd { color: var(--accent); word-break: break-all; font-size: 12px; }
+.modal-backdrop {
+  position: fixed; inset: 0; background: rgba(0,0,0,.6);
+  display: flex; align-items: center; justify-content: center; z-index: 40;
+}
+.modal-backdrop.hidden { display: none; }
+.modal {
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  width: min(760px, 94vw); max-height: 86vh; display: flex; flex-direction: column;
+}
+.modal-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 12px 16px; border-bottom: 1px solid var(--border);
+}
+.modal-head h3 { margin: 0; color: var(--accent); letter-spacing: 1px; font-size: 14px; text-transform: uppercase; }
+.modal-body { padding: 14px 16px; overflow: auto; }
+.perm-side { border: 1px solid var(--border); border-radius: 4px; background: var(--panel2); padding: 10px; margin-top: 10px; }
+.perm-head { font-size: 13px; font-weight: bold; margin-bottom: 6px; }
+.perm-methods { display: flex; flex-wrap: wrap; gap: 4px; }
+.chip {
+  display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px;
+  background: var(--panel); border: 1px solid var(--border); color: var(--text);
+}

@@ -9,7 +9,7 @@
 -- program, FLAT into the same folder as the program:
 --
 --   bunkerlib.lua, network.lua, crypto.lua, status.lua, drivers.lua,
---   actions.lua, doors.lua, monitor.lua, client.lua
+--   actions.lua, doors.lua, monitor.lua, gfx.lua, client.lua
 --
 -- Load with:
 --   local dir = fs.getDir(shell.getRunningProgram())
@@ -38,6 +38,7 @@ load("doors")     -- door controllers: DRIVERS.door + DRIVERS["safety-door"],
                   --                  ACTIONS.door + ACTIONS["safety-door"]
 load("monitor")   -- drawHeader, drawInfoPlaceholder, drawFooter,
                   -- drawToggleTable, drawPanel
+load("gfx")       -- 256-color graphics-mode drawing (cc-graphics mod)
 load("client")    -- runClient
 
 return bunkerlib

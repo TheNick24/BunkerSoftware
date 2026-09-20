@@ -12,7 +12,7 @@ function loadEnvFile(file = path.join(__dirname, "..", ".env")) {
 
 function config() {
   loadEnvFile();
-  const allowlist = (process.env.COMMAND_ALLOWLIST || "inspect,log.read,config.read,config.write,eval_lua,reboot,agent.update,release.deploy,release.rollback,monitor.capture")
+  const allowlist = (process.env.COMMAND_ALLOWLIST || "inspect,peripherals,log.read,config.read,config.write,eval_lua,reboot,agent.update,release.deploy,release.rollback,monitor.capture")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);

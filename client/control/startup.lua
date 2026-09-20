@@ -153,8 +153,109 @@ local timers = {}
 local insideMon = nil
 local drawInsideMonitor = nil
 
+-- ---- gfx (cc-graphics 256-color) rendering ----
+local gfxCaps = {}
+local function gfxKeypadAvailable()
+    if gfxCaps[keypadMonitorName] == nil then
+        local ok = bunkerlib.gfx.supported(keypadMon)
+        if ok then ok = bunkerlib.gfx.init(keypadMon) end
+        if not ok and keypadMon.setGraphicsMode then
+            pcall(function() keypadMon.setGraphicsMode(0) end)
+        end
+        gfxCaps[keypadMonitorName] = ok
+    end
+    return gfxCaps[keypadMonitorName]
+end
+local function gfxInsideAvailable()
+    if gfxCaps[INSIDE_MONITOR] == nil then
+        local ok = bunkerlib.gfx.supported(insideMon)
+        if ok then ok = bunkerlib.gfx.init(insideMon) end
+        if not ok and insideMon.setGraphicsMode then
+            pcall(function() insideMon.setGraphicsMode(0) end)
+        end
+        gfxCaps[INSIDE_MONITOR] = ok
+    end
+    return gfxCaps[INSIDE_MONITOR]
+end
+
+-- Same cell layout as the text keypad below (touch coordinates stay valid).
+local function gfxDrawKeypad()
+    local mon = keypadMon
+    local gg = bunkerlib.gfx
+    local CC = gg.C
+    local w, h = mon.getSize()
+
+    gg.begin(mon)
+
+    local keys, cols, rows
+    if h >= 5 then
+        cols, rows = 3, 4
+        keys = { "1","2","3", "4","5","6", "7","8","9", "C","0","OK" }
+    else
+        cols, rows = 4, 3
+        keys = { "1","2","3","4", "5","6","7","8", "9","C","0","OK" }
+    end
+
+    local codeRow  = (h - rows >= 1) and 1 or nil
+    local fieldTop = codeRow and 2 or 1
+    local gapX = (w >= 2 * cols - 1) and 1 or 0
+    local availW = w
+    local availH = h - fieldTop + 1
+
+    local bw = math.max(1, math.floor((availW - (cols-1)*gapX) / cols))
+    local bh = math.max(1, math.floor(availH / rows))
+    local totalW = cols * bw + (cols-1) * gapX
+    local startX = math.max(0, math.floor((w - totalW) / 2)) + 1
+    local totalH = rows * bh
+    local startY = math.max(fieldTop, h - totalH + 1)
+
+    if codeRow then
+        if msg then
+            local top = #msg <= (w - 2) and msg or (string.match(msg, "%S+") or "?")
+            if #top > (w - 2) then top = string.sub(top, 1, w - 2) end
+            local mc = msgColor == colors.green and CC.green
+                  or msgColor == colors.red and CC.red
+                  or msgColor == colors.yellow and CC.yellow
+                  or CC.white
+            gg.centerText(mon, codeRow, top, mc, CC.bg)
+        else
+            local d = ""
+            for i = 1, MAX_CODE_LEN do d = d .. (i <= #code and "*" or "-") end
+            gg.centerText(mon, codeRow, d, CC.white, CC.bg)
+        end
+    end
+
+    touchMap = {}
+    for i, key in ipairs(keys) do
+        local col = (i-1) % cols
+        local row = math.floor((i-1) / cols)
+        local x = startX + col * (bw + gapX)
+        local y = startY + row * bh
+        local bg = key == "OK" and CC.green
+                or key == "C"  and CC.red
+                or CC.panel
+        local fg = (key == "OK" or key == "C") and CC.bg or CC.white
+
+        gg.cellFill(mon, x, y, bw, bh, bg)
+        local label = key
+        if bw < #label then label = string.sub(label, 1, bw) end
+        gg.cellText(mon, x + math.floor((bw - #label) / 2), y + math.floor((bh - 1) / 2), label, fg, bg)
+
+        for dy = 0, bh-1 do
+            touchMap[y+dy] = touchMap[y+dy] or {}
+            for dx = 0, bw-1 do touchMap[y+dy][x+dx] = key end
+        end
+    end
+
+    gg.finish(mon)
+end
+
 local function drawKeypad()
     if not keypadMon then return end
+    if gfxKeypadAvailable() then
+        gfxDrawKeypad()
+        return
+    end
     local mon = keypadMon
     local w, h = mon.getSize()
 
@@ -281,8 +382,50 @@ end
 -- ============ INSIDE MONITOR ============
 local insideBtn = nil -- { x, y, w, h }
 
+local function gfxInside(state)
+    local mon = insideMon
+    local gg = bunkerlib.gfx
+    local CC = gg.C
+    local w, h = mon.getSize()
+
+    gg.begin(mon)
+    gg.centerText(mon, 1, "DOOR", CC.cyan, CC.bg)
+    gg.centerText(mon, 2, "ACCESS", CC.cyan, CC.bg)
+    gg.hline(mon, 2 * gg.CELL_H - 1, CC.borderD)
+
+    if state == "open" then
+        gg.cellFill(mon, 1, 3, w, 3, CC.green)
+        gg.centerText(mon, 4, "OPEN", CC.white, CC.green)
+        insideBtn = nil
+    elseif state == "locked" then
+        gg.cellFill(mon, 1, 3, w, 3, CC.red)
+        gg.centerText(mon, 4, "LOCKED", CC.white, CC.red)
+        insideBtn = nil
+    else
+        -- Big green button with a subtle "raised key" frame: bright top/left
+        -- edge, dark bottom/right edge, bright label.
+        gg.cellFill(mon, 1, 3, w, 3, CC.green)
+        local yTop  = (3 - 1) * gg.CELL_H
+        local yBot  = (3 + 3) * gg.CELL_H - 1
+        local xL    = 0
+        local xR    = w * gg.CELL_W - 1
+        local btnH  = 3 * gg.CELL_H
+        gg.hline(mon, yTop, CC.white)
+        gg.hline(mon, yBot, CC.borderD)
+        gg.fill(mon, xL, yTop, 1, btnH, CC.white)
+        gg.fill(mon, xR, yTop, 1, btnH, CC.borderD)
+        gg.centerText(mon, 4, "OPEN", CC.white, CC.green)
+        insideBtn = { x = 1, y = 3, w = w, h = 3 }
+    end
+    gg.finish(mon)
+end
+
 drawInsideMonitor = function(state)
     if not insideMon then return end
+    if gfxInsideAvailable() then
+        gfxInside(state)
+        return
+    end
     local mon = insideMon
     local w, h = mon.getSize()
     mon.setBackgroundColor(colors.black)
@@ -363,13 +506,27 @@ bunkerlib.runClient({
             local action = timers[p1]
             if action then action(); timers[p1] = nil end
         elseif event == "monitor_touch" then
-            if p1 == keypadMonitorName
-               and touchMap[p3] and touchMap[p3][p2] then
-                handleKey(touchMap[p3][p2])
+            if p1 == keypadMonitorName then
+                local g = bunkerlib.gfx
+                local k = touchMap[p3] and touchMap[p3][p2]
+                -- cc-graphics can report pixel coordinates (0-based) instead
+                -- of cell coordinates; map them back to the cell grid.
+                if not k then
+                    local cx = math.floor((p2 - 1) / g.CELL_W) + 1
+                    local cy = math.floor((p3 - 1) / g.CELL_H) + 1
+                    k = touchMap[cy] and touchMap[cy][cx]
+                end
+                if k then handleKey(k) end
             elseif p1 == INSIDE_MONITOR and insideBtn then
                 local b = insideBtn
-                if p2 >= b.x and p2 < b.x + b.w
-                   and p3 >= b.y and p3 < b.y + b.h then
+                local g = bunkerlib.gfx
+                local hitCell = p2 >= b.x and p2 < b.x + b.w
+                            and p3 >= b.y and p3 < b.y + b.h
+                local px0 = (b.x - 1) * g.CELL_W
+                local py0 = (b.y - 1) * g.CELL_H
+                local hitPixel = p2 >= 0 and p2 < px0 + b.w * g.CELL_W
+                             and p3 >= 0 and p3 < py0 + b.h * g.CELL_H
+                if hitCell or hitPixel then
                     openDoor()
                     drawInsideMonitor("open")
                 end

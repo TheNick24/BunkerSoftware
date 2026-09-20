@@ -284,3 +284,46 @@ API to be enabled in the CC config.
 3. New transport (how it is driven): add a driver in `bunkerlib.DRIVERS`
 4. New behavior (what a button does): add an action in `bunkerlib.ACTIONS`
    and adjust the panel's `action` / device's `cmd`
+
+## Controlplane (operator API + web UI + agents)
+
+`controlplane/` runs *next to* the CC network, outside ComputerCraft (Node.js).
+Every CC computer runs a small agent (`controlplane/agent/agentd.lua`) that
+bootstraps from `GET /agentd.lua`, registers and then long-polls
+`POST /agent/poll`. All agent traffic is signed (HMAC over
+`METHOD\nPATH\nSEQ\nBODY`, strictly-increasing sequence, replay-safe).
+
+- `.env` - operator token, HMAC secret, `COMMAND_ALLOWLIST`, bind host/port
+  (read at startup; a change requires a restart)
+- `node server/index.js` - HTTP server: device ingress + release files on
+  (`127.0.0.1:<PORT>`) signed with HMAC when a tunnel maps them into the CC
+  network; operator API + web UI protected by `x-operator-token`
+- `node mcp/index.js` - MCP server over stdio (`npm run mcp`); exposes the
+  operator API as MCP tools
+- `tools/build-releases.js` (`npm run build`) - builds the `subsystem` bundles
+  from `tools/roles.json`; a deploy publishes `releases/<id>/` + `manifest.json`
+- `tools/install.lua` + `deploy/` - legacy MAMDANI bootstrap/deploy for the
+  CC network (roles: `controlserver`, `control`, `entrance`, `meroom`)
+- `public/` - the operator web UI (device list, commands, release deploy)
+
+Commands (all require `agent.update` to be running the matching `agentd.lua`):
+
+```
+inspect             device info + latest client status
+peripherals         every attached peripheral with type + methods
+                    (monitors: size + text scale) - button in the web UI
+monitor.capture     list monitors / capture a monitor's text
+config.read/write   read/write the agent settings
+log.read            agent log
+reboot              restart the computer (agent plus room program)
+agent.update        pull the newest agentd.lua + reboot
+release.deploy      build + install a release for a role/installation
+release.rollback    switch back to the previous release
+eval_lua            run an arbitrary snippet on the target
+```
+
+To keep the fleet reachable through the operator, run a tunnel into the
+controlplane port (e.g. the local line in `.env` points
+`AGENT_BASE_URL`/`releases` at the public HTTPS URL that maps back to
+`127.0.0.1:<PORT>`), then pair a CC computer with
+`wget run <AGENT_BASE_URL>/agentd.lua <deviceId> <pairingToken>`.

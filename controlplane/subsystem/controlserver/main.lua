@@ -19,7 +19,7 @@ local bunkerlib = require("bunkerlib")
 
 -- ============ CONFIG ============
 local HASH_FILE = "bunker.hash"
-local UPDATE_INTERVAL = 2
+local UPDATE_INTERVAL = 20
 
 -- The room itself always runs (lights, monitors, status) - only the command
 -- console needs the password. It starts LOCKED and re-locks after inactivity.
@@ -285,11 +285,176 @@ local function runControl()
         return #panel.entries
     end
 
+    -- ---- gfx (cc-graphics 256-color) rendering ----
+    local g = bunkerlib.gfx
+    local C = g.C
+    local gfxCaps = {}
+    local function monGfx(mon)
+        local key = mon.name
+        if gfxCaps[key] == nil then
+            local ok = g.supported(mon.mon)
+            if ok then ok = g.init(mon.mon) end
+            if not ok and mon.mon.setGraphicsMode then
+                pcall(function() mon.mon.setGraphicsMode(0) end)
+            end
+            gfxCaps[key] = ok
+        end
+        return gfxCaps[key]
+    end
+
+    local function gfxHeader(mon)
+        g.centerText(mon.mon, 1, "MAMDANI OS", C.cyan, C.bg)
+        g.hline(mon.mon, 2 * g.CELL_H - 1, C.borderD)
+    end
+
+    local function gfxFooter(mon, label, extra)
+        local w, h = mon.mon.getSize()
+        local fy = h - 1
+        g.hline(mon.mon, fy * g.CELL_H - 1, C.borderD)
+        g.cellText(mon.mon, 2, h, label, C.dim, C.bg)
+        if extra then
+            g.cellText(mon.mon, w - #extra + 1, h, extra, C.cyan, C.bg)
+        end
+    end
+
+    local function gfxAlarmBar(mon)
+        local h = mon.mon.getSize()
+        g.bar(mon.mon, h, C.red)
+        g.centerText(mon.mon, h, "!! ALARM !!", C.white, C.red)
+    end
+
+    -- one toggle table (same cell layout as drawToggleTable so touch rows match)
+    local function gfxToggleTable(mon, src, startRow, btns)
+        local w = mon.mon.getSize()
+        local action = src.action or "light"
+        local label = src.button or "[CLICK]"
+        local btnW = #label
+        local btnX = w - btnW + 1
+        local header = src.header or "STATE"
+        local onText = src.onText or "ON"
+        local offText = src.offText or "OFF"
+        local stateW = math.max(#header, #onText, #offText, #"OFFLINE")
+        local zoneRight = btnX - 1
+        local zoneLeft = zoneRight - stateW + 1
+        local maxName = math.max(3, zoneLeft - 2)
+
+        g.cellText(mon.mon, 2, startRow, "NAME", C.yellow, C.bg)
+        local hx = zoneLeft + math.floor((stateW - #header) / 2)
+        g.cellText(mon.mon, hx, startRow, header, C.yellow, C.bg)
+        g.hline(mon.mon, startRow * g.CELL_H - 1, C.borderD)
+
+        local clientCount = 0
+        for i, entry in ipairs(src.entries) do
+            local y = startRow + 1 + i
+            local status = statuses[entry.id]
+            local online = status ~= nil
+            local rowBg = (i % 2 == 1) and C.panel or C.panel2
+            g.cellFill(mon.mon, 1, y, w, 1, rowBg)
+            local name = entry.name
+            if #name > maxName then name = string.sub(name, 1, maxName) end
+            g.cellText(mon.mon, 2, y, name, C.text, rowBg)
+            if online then
+                clientCount = clientCount + 1
+                local txt = status.state and onText or offText
+                local sx = zoneLeft + math.floor((stateW - #txt) / 2)
+                local sc = status.state and C.yellow or C.dim
+                g.cellText(mon.mon, sx, y, txt, sc, rowBg)
+            else
+                g.cellText(mon.mon, zoneLeft, y, "OFFLINE", C.red, rowBg)
+            end
+            local bc = (online and status.state) and C.green or C.dim
+            g.cellFill(mon.mon, btnX, y, btnW, 1, bc)
+            g.cellText(mon.mon, btnX, y, label, C.bg, bc)
+            g.hline(mon.mon, y * g.CELL_H - 1, C.borderD)
+            btns[y] = { id = entry.id, action = action }
+        end
+        return clientCount
+    end
+
+    local function gfxPanel(mon, panel)
+        g.begin(mon.mon)
+        gfxHeader(mon)
+        local btns = {}
+        buttons[mon.name] = btns
+        local total = countEntries(panel)
+        local n
+        if panel.sections then
+            n = 0
+            local y = 4
+            for _, sec in ipairs(panel.sections) do
+                g.cellText(mon.mon, 2, y, sec.title or panel.title or "GROUP", C.cyan, C.bg)
+                n = n + gfxToggleTable(mon, sec, y + 1, btns)
+                y = y + 4 + #sec.entries
+            end
+        else
+            n = gfxToggleTable(mon, panel, 4, btns)
+        end
+        gfxFooter(mon, panel.title, "CLIENTS: " .. n .. "/" .. total)
+        if alarm then gfxAlarmBar(mon) end
+        g.finish(mon.mon)
+    end
+
+    local function gfxInfo(mon)
+        local w, h = mon.mon.getSize()
+        g.begin(mon.mon)
+        gfxHeader(mon)
+        local bx1, by1 = 2, 3
+        local bx2, by2 = w - 1, math.max(by1, math.min(h - 2, 8))
+        local bw = bx2 - bx1 + 1
+        local bh = by2 - by1 + 1
+        if bh > 2 then
+            g.cellFill(mon.mon, bx1 + 1, by1 + 1, bw - 2, bh - 2, C.panel)
+        end
+        if bh > 0 then
+            g.cellFill(mon.mon, bx1, by1, bw, 1, C.borderD)
+            g.cellFill(mon.mon, bx1, by2, bw, 1, C.borderD)
+            if bh > 2 then
+                g.cellFill(mon.mon, bx1, by1 + 1, 1, bh - 2, C.borderD)
+                g.cellFill(mon.mon, bx2, by1 + 1, 1, bh - 2, C.borderD)
+            end
+        end
+        local lines = {
+            { "INFO PANEL", C.yellow },
+            { "No content assigned yet.", C.dim },
+            { "Config: MONITOR_PANELS", C.dim },
+        }
+        for li, line in ipairs(lines) do
+            local ry = by1 + li
+            if ry <= by2 then
+                g.cellText(mon.mon, bx1 + 1, ry, line[1], line[2], C.panel)
+            end
+        end
+        gfxFooter(mon, "INFO DISPLAY")
+        g.finish(mon.mon)
+    end
+
+    local function gfxAlarmButton(mon)
+        local h = mon.mon.getSize()
+        local pw, ph = g.pxSize(mon.mon)
+        g.begin(mon.mon)
+        local bg = alarm and C.red or C.orange
+        g.fill(mon.mon, 0, 0, pw, ph, bg)
+        if alarm then g.centerText(mon.mon, 2, "STOP", C.white, bg) end
+        g.centerText(mon.mon, 3, "ALARM", alarm and C.white or C.bg, bg)
+        local bts = {}
+        buttons[mon.name] = bts
+        for i = 1, h do bts[i] = { id = "__ALARM__" } end
+        g.finish(mon.mon)
+    end
+
     local function drawMonitors()
         buttons = {}
         for _, mon in ipairs(monitors) do
             local panel = MONITOR_PANELS[mon.name]
-            if mon.name == ALARM_BUTTON_MONITOR then
+            if monGfx(mon) then
+                if mon.name == ALARM_BUTTON_MONITOR then
+                    gfxAlarmButton(mon)
+                elseif panel and countEntries(panel) > 0 then
+                    gfxPanel(mon, panel)
+                else
+                    gfxInfo(mon)
+                end
+            elseif mon.name == ALARM_BUTTON_MONITOR then
                 -- dedicated monitor: big tappable ALARM button
                 local w, h = mon.mon.getSize()
                 mon.mon.setBackgroundColor(colors.black)
@@ -345,14 +510,37 @@ local function runControl()
         end
     end
 
-    drawMonitors()
+    local function statusKey()
+        local parts = {}
+        for id, s in pairs(statuses) do
+            parts[#parts + 1] = id .. "=" .. tostring(s.state) .. "@" .. tostring(s.senderId)
+        end
+        table.sort(parts)
+        return table.concat(parts, "|") .. "|alarm=" .. tostring(alarm)
+    end
+
+    local lastKey = ""
+    local function drawMonitorsIfChanged(force)
+        if force then
+            drawMonitors()
+            lastKey = statusKey()
+            return
+        end
+        local k = statusKey()
+        if k ~= lastKey then
+            lastKey = k
+            drawMonitors()
+        end
+    end
+
+    drawMonitorsIfChanged(true)
 
     -- ---- alarm control (shared by alarm button + console) ----
     local function setAlarm(on)
         alarm = on
         audit("alarm " .. (on and "ON" or "OFF"))
         local n = bunkerlib.emergencyDoors(statuses, on)
-        drawMonitors()
+        drawMonitorsIfChanged(true)
         if on then
             outWrite("ALARM - " .. n .. " safety door(s) CLOSED.", colors.red)
         else
@@ -574,31 +762,48 @@ local function runControl()
     renderOut()
     drawPrompt()
     local updateTimer = os.startTimer(UPDATE_INTERVAL)
+    local tick = 0
 
     while running do
         local event, p1, p2, p3 = os.pullEvent()
 
         if event == "timer" and p1 == updateTimer then
-            drawMonitors()
+            -- redraw only when something changed; repaint fully on every
+            -- second tick in case the world unloaded and wiped the screens
+            local force = (tick % 2 == 1)
+            drawMonitorsIfChanged(force)
+            tick = tick + 1
             updateTimer = os.startTimer(UPDATE_INTERVAL)
         elseif event == "timer" and p1 == lockTimer then
             if not locked then
                 lockConsole("idle " .. LOCK_AFTER_IDLE .. "s")
             end
         elseif event == "monitor_touch" then
-            local btns = buttons[p1]
-            if btns and btns[p3] then
-                local btn = btns[p3]
-                if btn.id == "__ALARM__" then
-                    setAlarm(not alarm)
-                else
-                    local status = statuses[btn.id]
-                    if status then
-                        local panel = MONITOR_PANELS[p1]
-                        local action = panel and bunkerlib.ACTIONS[btn.action or "light"]
-                        if action then
-                            local msg = action(status, btn.id)
-                            rednet.send(status.senderId, msg, "bunker_cmd")
+            local monName = p1
+            if monName == ALARM_BUTTON_MONITOR then
+                setAlarm(not alarm)
+            else
+                local btns = buttons[monName]
+                if btns then
+                    local y = p3
+                    if gfxCaps[monName] then
+                        -- graphics mode reports pixel co-ordinates on touch
+                        y = math.floor(p3 / g.CELL_H) + 1
+                    end
+                    local btn = btns[y]
+                    if btn then
+                        if btn.id == "__ALARM__" then
+                            setAlarm(not alarm)
+                        else
+                            local status = statuses[btn.id]
+                            if status then
+                                local panel = MONITOR_PANELS[monName]
+                                local action = panel and bunkerlib.ACTIONS[btn.action or "light"]
+                                if action then
+                                    local msg = action(status, btn.id)
+                                    rednet.send(status.senderId, msg, "bunker_cmd")
+                                end
+                            end
                         end
                     end
                 end
@@ -607,7 +812,7 @@ local function runControl()
             local senderId, message, protocol = p1, p2, p3
             if protocol == "bunker_status" and type(message) == "table" and message.id then
                 bunkerlib.setStatus(statuses, message.id, senderId, message.state, message.cmd)
-                drawMonitors()
+                drawMonitorsIfChanged()
             end
         elseif event == "char" then
             if not locked then resetLockTimer() end

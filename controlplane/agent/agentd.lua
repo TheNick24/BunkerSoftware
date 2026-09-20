@@ -437,6 +437,56 @@ local function listPeripherals()
     return out
 end
 
+-- command: peripherals with methods (peripherals command)
+-- Returns every peripheral (or a single one with payload.side) as
+-- { side, type, methods = { ... } }; monitors get their size + text
+-- scale appended. Method names come from peripheral.getMethods and are
+-- safe to query (no side effects).
+local function listPeripheralsDetail(payload)
+    local out = {}
+    local wanted = payload and payload.side
+    if not peripheral then return out end
+    for _, side in ipairs(peripheral.getNames() or {}) do
+        if not wanted or side == wanted then
+            local typ
+            local okT, t = pcall(function() return peripheral.getType(side) end)
+            if okT then typ = t end
+            local methods = {}
+            local okM, ms = pcall(function() return peripheral.getMethods(side) end)
+            if okM and type(ms) == "table" then
+                for _, m in ipairs(ms) do methods[#methods + 1] = tostring(m) end
+                table.sort(methods)
+            end
+            local rec = { side = side, type = typ or nil, methods = methods }
+            if typ and typ:find("monitor") then
+                local ok, mon = pcall(function() return peripheral.wrap(side) end)
+                if ok and mon then
+                    local ok2, scale = pcall(function() return mon.getTextScale() end)
+                    local ok3, w, h = pcall(function() local a, b = mon.getSize() return a, b end)
+                    local ok4, isColor = pcall(function() return mon.isColor() end)
+                    local ok5, gmode = pcall(function() return mon.getGraphicsMode() end)
+                    local ok6, px0 = pcall(function() return mon.getPixel(0, 0) end)
+                    local ok7, pal0 = pcall(function() return mon.getPaletteColor(0) end)
+                    rec.textScale = ok2 and scale or nil
+                    rec.size = ok3 and { w or 0, h or 0 } or nil
+                    rec.isColor = ok4 and (isColor == true) or nil
+                    rec.graphicsMode = ok5 and gmode or nil
+                    rec.pixel00 = ok6 and px0 or nil
+                    if ok7 and type(pal0) == "table" then
+                        rec.palette0 = {
+                            math.floor((pal0[1] or 0) * 255 + 0.5),
+                            math.floor((pal0[2] or 0) * 255 + 0.5),
+                            math.floor((pal0[3] or 0) * 255 + 0.5),
+                        }
+                    end
+                end
+            end
+            out[side] = rec
+        end
+    end
+    return out
+end
+
 local function listMonitors(payload)
     local out = {}
     local wanted = payload and payload.side
@@ -580,11 +630,13 @@ local function handleCommand(cmd)
     log("cmd " .. tostring(cid) .. " " .. tostring(ctype))
 
     if ctype == "inspect" then
+        local okU, up = pcall(function() return os.uptime() end)
+        if not okU then okU, up = pcall(function() return computer.uptime() end) end
         return reportCommand(cid, "done", {
             computerId = os.getComputerID(),
             label = os.getComputerLabel() or ("cc" .. os.getComputerID()),
             agentVersion = AGENT_VERSION,
-            uptime = math.floor(os.uptime()),
+            uptime = (okU and up) and math.floor(up) or nil,
             epochMs = os.epoch("utc"),
             peripherals = listPeripherals(),
             currentRelease = s.currentRelease,
@@ -683,6 +735,13 @@ local function handleCommand(cmd)
         os.reboot()
     elseif ctype == "monitor.capture" then
         return reportCommand(cid, "done", { monitors = listMonitors(payload) })
+    elseif ctype == "peripherals" then
+        return reportCommand(cid, "done", {
+            computerId = os.getComputerID(),
+            label = os.getComputerLabel() or ("cc" .. os.getComputerID()),
+            agentVersion = AGENT_VERSION,
+            peripherals = listPeripheralsDetail(payload),
+        })
     else
         return reportCommand(cid, "error", "unknown command type: " .. tostring(ctype))
     end

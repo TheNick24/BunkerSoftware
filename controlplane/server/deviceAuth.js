@@ -21,14 +21,24 @@ function deviceAuth(store) {
     const dev = store.devices[id];
     if (!dev || !dev.secret) return fail(res, 401, "unknown device"), false;
 
-    if (seq <= dev.seq) return fail(res, 409, "sequence replay rejected"), false;
+    if (seq < dev.seq) return fail(res, 409, "sequence replay rejected"), false;
     if (seq > dev.seq + 100000) return fail(res, 400, "sequence too far ahead"), false;
 
     const expect = hmacHex(dev.secret, canonical(req.method, req.urlNoQuery, seq, rawBody));
     if (!constantTimeEqualHex(expect, sig)) return fail(res, 401, "bad signature"), false;
 
-    dev.seq = seq;
-    dev.lastSeen = Date.now();
+    if (seq === dev.seq) {
+      // Lost-response retry: a request of this exact seq was already verified
+      // and processed, but the response never reached the agent (e.g. the
+      // server crashed mid long-poll). Accept it idempotently - refresh
+      // lastSeen but do NOT advance the sequence - so the agent can resume.
+      req.replayed = true;
+      dev.lastSeen = Date.now();
+    } else {
+      req.replayed = false;
+      dev.seq = seq;
+      dev.lastSeen = Date.now();
+    }
     store.persistDevices();
 
     req.agentId = id;

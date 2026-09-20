@@ -62,6 +62,7 @@
     bindPairing();
     bindReleases();
     bindConfig();
+    $("#permClose").addEventListener("click", function () { $("#permModal").classList.add("hidden"); });
     pollStatus();
     loadFleet();
     loadReleases();
@@ -150,6 +151,7 @@
     el.querySelector('[data-a="agent-update"]').addEventListener("click", function () { quickCmd(d.id, "agent.update", {}); });
     el.querySelector('[data-a="rollback"]').addEventListener("click", function () { quickCmd(d.id, "release.rollback", {}); });
     el.querySelector('[data-a="cmd"]').addEventListener("click", function () { customCmd(d.id); });
+    el.querySelector('[data-a="perms"]').addEventListener("click", function () { openPeripherals(d.id); });
     el.querySelector('[data-a="cmds"]').addEventListener("click", function () { toggleCommands(el, d.id); });
     el.querySelector('[data-a="rename"]').addEventListener("click", function () { renameDevice(d.id, el.querySelector('[data-i="name"]').value); });
     el.querySelector('[data-a="change-id"]').addEventListener("click", function () { changeId(d.id, el.querySelector('[data-i="newid"]').value); });
@@ -172,6 +174,7 @@
         '<button data-a="agent-update">update agent</button>' +
         '<button data-a="rollback">rollback</button>' +
         '<button data-a="cmd">command…</button>' +
+        '<button data-a="perms">peripherals</button>' +
         '<button data-a="cmds">commands</button>' +
       "</div>" +
       '<div class="row manage">' +
@@ -244,6 +247,64 @@
       catch (e) { toast("invalid payload JSON", "err"); return; }
     }
     quickCmd(deviceId, type, payload);
+  }
+
+  function openPeripherals(deviceId) {
+    var box = $("#permModal");
+    box.classList.remove("hidden");
+    var body = $("#permBody");
+    $("#permTitle").textContent = "Peripherals - #" + deviceId;
+    body.innerHTML = '<div class="muted">Requesting peripherals from #' + deviceId + "…</div>";
+    api("/api/devices/" + deviceId + "/command", { method: "POST", body: { type: "peripherals", payload: {} } })
+      .then(function (r) { return waitCommand(r.cid, 60); })
+      .then(function (c) { renderPeripherals(body, c); })
+      .catch(function (e) {
+        body.innerHTML = '<div class="banner err">' + esc(e.message || "request failed") + "</div>";
+      });
+  }
+
+  function waitCommand(cid, seconds) {
+    var end = Date.now() + seconds * 1000;
+    return new Promise(function (resolve, reject) {
+      var tick = function () {
+        api("/api/commands/" + cid).then(function (c) {
+          if (!c) return setTimeout(tick, 1500);
+          if (c.status === "done") return resolve(c);
+          if (c.status === "error") return reject(new Error("command " + cid + " error: " + (typeof c.result === "string" ? c.result : JSON.stringify(c.result || ""))));
+          if (Date.now() > end) return reject(new Error("command " + cid + " still pending"));
+          setTimeout(tick, 1500);
+        }).catch(function () {
+          if (Date.now() > end) return reject(new Error("command " + cid + " still pending"));
+          setTimeout(tick, 1500);
+        });
+      };
+      setTimeout(tick, 1200);
+    });
+  }
+
+  function renderPeripherals(body, c) {
+    var res = (c && c.result) || {};
+    var perms = res.peripherals || {};
+    var sides = Object.keys(perms).sort(function (a, b) { return String(a).localeCompare(String(b), "en", { numeric: true }); });
+    if (!sides.length) {
+      body.innerHTML = '<div class="muted">No peripherals found on this computer.</div>';
+      return;
+    }
+    var head = '<div class="row muted">computer ' + esc(res.label || res.computerId) +
+      " &middot; agent " + esc(res.agentVersion || "?") + "</div>";
+    body.innerHTML = head + sides.map(function (side) {
+      var p = perms[side];
+      var info = esc(side) + " <span class='muted'> / " + esc(p.type || "?") + "</span>";
+      if (p.size) {
+        info += " <span class='muted'>[" + esc(String(p.size[0])) + "x" + esc(String(p.size[1])) +
+          (p.textScale ? " @x" + esc(String(p.textScale)) : "") + "]</span>";
+      }
+      var chips = (p.methods || []).map(function (m) {
+        return '<span class="chip">' + esc(String(m)) + "</span>";
+      }).join("");
+      return '<div class="perm-side"><div class="perm-head">' + info + "</div>" +
+        '<div class="perm-methods">' + (chips || '<span class="muted">(no methods)</span>') + "</div></div>";
+    }).join("");
   }
 
   function toggleCommands(el, deviceId) {
