@@ -1,10 +1,16 @@
 -- ============================================
--- MAMDANI OS - CONTROL ROOM
--- Setup: control setup
--- Start: control (or control start)
+-- MAMDANI OS - CONTROL SERVER
+-- Setup: setup            (set password)
+-- Start: start            (auto-run on normal boot)
 -- ============================================
 
 local args = { ... }
+
+-- controlplane health marker (no-op without the agent)
+if fs.exists("/controlplane") then
+    local _hf = fs.open("/controlplane/health.marker", "w")
+    if _hf then _hf.write("healthy\n") _hf.close() end
+end
 
 -- ============ LIB ============
 local dir = fs.getDir(shell.getRunningProgram())
@@ -116,7 +122,11 @@ local function loadHistory()
 end
 
 -- ============ SETUP ============
-local function runSetup()
+-- Asks for a new password (with confirmation + min length) and returns the
+-- PBKDF2 hash string. Returns nil when the input was invalid. Used by the
+-- `setup` command AND on first boot in runControl(), so a fresh deployment
+-- prompts for the password right inside the running system.
+local function promptForPasswordHash()
     term.clear()
     term.setCursorPos(1, 1)
     term.setTextColor(colors.cyan)
@@ -124,7 +134,7 @@ local function runSetup()
     print("     MAMDANI OS - SETUP")
     print("==========================")
     term.setTextColor(colors.white)
-    print("New password:")
+    print("New password (min. 6 characters):")
     term.setTextColor(colors.gray)
     local p1 = read("*")
     term.setTextColor(colors.white)
@@ -135,29 +145,53 @@ local function runSetup()
     if p1 ~= p2 then
         term.setTextColor(colors.red)
         print("Passwords do not match!")
-        return
+        term.setTextColor(colors.white)
+        return nil
     end
     if #p1 < 6 then
         term.setTextColor(colors.red)
         print("Password too short (min. 6 characters)!")
-        return
+        term.setTextColor(colors.white)
+        return nil
     end
-    local h = bunkerlib.hashPassword(p1)
-    saveHash(h)
-    term.setTextColor(colors.green)
-    print("Password saved!")
-    term.setTextColor(colors.white)
+    return bunkerlib.hashPassword(p1)
+end
+
+local function runSetup()
+    local hash = promptForPasswordHash()
+    if hash then
+        saveHash(hash)
+        term.setTextColor(colors.green)
+        print("Password saved!")
+        term.setTextColor(colors.white)
+    end
 end
 
 -- ============ CONTROL ROOM ============
 local function runControl()
     local expected = loadHash()
     if not expected then
-        term.setTextColor(colors.red)
-        print("No password set up!")
+        -- First start without a password: do NOT exit / ask for a separate
+        -- `setup` run - the booted client is main.lua without that hint.
+        -- Ask right here so the room keeps running and the console gets a
+        -- password to unlock against.
+        term.setTextColor(colors.yellow)
+        print("No password set up yet - please set one now (console starts locked).")
         term.setTextColor(colors.white)
-        print("Run: startup setup")
-        return
+        while true do
+            local hash = promptForPasswordHash()
+            if hash then
+                saveHash(hash)
+                expected = hash
+                term.setTextColor(colors.green)
+                print("Password saved!")
+                term.setTextColor(colors.white)
+                break
+            end
+            term.setTextColor(colors.yellow)
+            print("A password is required - try again.")
+            term.setTextColor(colors.white)
+        end
     end
 
     term.setTextColor(colors.cyan)

@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bunker Controlplane</title>
+<link rel="stylesheet" href="/assets/app.css?v=2">
+</head>
+<body>
+
+<div id="tokenGate">
+  <div class="box">
+    <h2>Operator token required</h2>
+    <input type="password" id="gateToken" placeholder="x-operator-token" autocomplete="off">
+    <button class="primary block" id="gateBtn">Unlock dashboard</button>
+    <p class="hint">The controlplane keeps the operator surface on loopback. The token is set via <code>OPERATOR_TOKEN</code> in the server <code>.env</code>. It is stored in this browser only.</p>
+  </div>
+</div>
+
+<header>
+  <h1>BUNKER / CONTROLPLANE</h1>
+  <label class="muted" style="margin:0">token</label>
+  <input type="password" id="tokenInput" placeholder="x-operator-token" autocomplete="off">
+  <span class="spacer"></span>
+  <label class="muted" style="margin:0" id="serverStatus">offline</label>
+</header>
+
+<nav>
+  <button data-panel="fleet" class="active">Fleet</button>
+  <button data-panel="pairing">Pairing</button>
+  <button data-panel="releases">Releases</button>
+  <button data-panel="config">Desired state</button>
+</nav>
+
+<main>
+  <section id="panel-fleet" class="active">
+    <h2>Fleet</h2>
+    <div id="fleetGrid" class="grid"></div>
+    <div id="fleetEmpty" class="card muted">No devices paired yet. Use the Pairing tab.</div>
+  </section>
+
+  <section id="panel-pairing">
+    <h2>Pair a new device</h2>
+    <div class="card boxed">
+      <label for="pairName">Label (optional)</label>
+      <input type="text" id="pairName" placeholder="cc1" class="block">
+      <label for="pairId">Computer ID</label>
+      <input type="number" id="pairId" placeholder="e.g. 12" class="block">
+      <div class="row">
+        <button class="primary" id="pairBtn">Generate pairing token</button>
+      </div>
+      <div id="pairResult" class="hidden"></div>
+    </div>
+  </section>
+
+  <section id="panel-releases">
+    <h2>Deploy a release</h2>
+    <div class="card boxed">
+      <div class="form-grid">
+        <div>
+          <label for="depDevice">Device</label>
+          <select id="depDevice" class="block"></select>
+        </div>
+        <div>
+          <label for="depRole">Role (subsystem folder)</label>
+          <input type="text" id="depRole" placeholder="demo" class="block">
+        </div>
+        <div class="full">
+          <label for="depInstall">Installation (installation folder)</label>
+          <input type="text" id="depInstall" placeholder="base" class="block">
+        </div>
+      </div>
+      <div class="row">
+        <button class="primary" id="deployBtn">Build &amp; deploy</button>
+      </div>
+    </div>
+    <h2>Releases</h2>
+    <div class="card">
+      <table>
+        <thead><tr><th>Release</th><th>Role</th><th>Installation</th><th>Created</th><th>Files</th><th>Targets</th></tr></thead>
+        <tbody id="releaseRows"></tbody>
+      </table>
+      <div class="muted" id="releaseEmpty">No releases yet.</div>
+    </div>
+  </section>
+
+  <section id="panel-config">
+    <h2>Desired state (role/installation per device)</h2>
+    <div class="card">
+      <label for="configText"><code>{"devices": {"12": {"role": "demo", "installation": "base"}}}</code></label>
+      <textarea id="configText" spellcheck="false"></textarea>
+      <div class="row">
+        <button id="configLoad">Load from server</button>
+        <button class="primary" id="configSave">Save</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<div id="toasts"></div>
+
+<script src="/assets/app.js?v=2"></script>
+</body>
+</html>

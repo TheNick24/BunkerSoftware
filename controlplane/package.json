@@ -1,0 +1,19 @@
+{
+  "name": "controlplane",
+  "version": "0.1.0",
+  "description": "Local-first control plane for CC:Tweaked / ComputerCraft fleets (operator API, dashboard, releases, MCP over stdio).",
+  "private": true,
+  "type": "commonjs",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "mcp": "node mcp/index.js",
+    "build:releases": "node ../tools/build-releases.js",
+    "watch:releases": "node ../tools/build-releases.js --watch",
+    "test": "node --test tests/",
+    "tunnel" : "cloudflared tunnel --config ../tunnel.yaml run weber0"
+  },
+  "license": "UNLICENSED"
+}

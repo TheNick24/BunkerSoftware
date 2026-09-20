@@ -1,0 +1,10 @@
+{
+  "name": "bunker-software",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build": "node tools/build-releases.js",
+    "build:watch": "node tools/build-releases.js --watch"
+  },
+  "license": "UNLICENSED"
+}
