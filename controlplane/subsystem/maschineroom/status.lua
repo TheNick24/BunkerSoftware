@@ -5,12 +5,13 @@
 -- ============================================
 
 return function(bunkerlib)
-    function bunkerlib.setStatus(statuses, id, senderId, state, cmd)
+    function bunkerlib.setStatus(statuses, id, senderId, state, cmd, lock)
         statuses[id] = {
             state = state,
             cmd = cmd,
             senderId = senderId,
             lastSeen = os.clock(),
+            lock = lock or nil,
         }
     end
 

@@ -152,6 +152,7 @@ local msgColor = colors.white
 local timers = {}
 local insideMon = nil
 local drawInsideMonitor = nil
+local drawInsideState = nil
 
 -- ---- gfx (cc-graphics 256-color) rendering ----
 local gfxCaps = {}
@@ -343,14 +344,17 @@ local function drawKeypad()
 end
 
 local function openDoor()
-    pcall(bunkerlib.driver("door").set, DOOR_DEVICE, true)
+    local drv = bunkerlib.driver("door")
+    if drv.isLocked and drv.isLocked(DOOR_DEVICE) then
+        return false
+    end
+    pcall(drv.set, DOOR_DEVICE, true)
     local id = os.startTimer(DOOR_TIMEOUT)
     timers[id] = function()
         pcall(bunkerlib.driver("door").set, DOOR_DEVICE, false)
-        if insideMon then drawInsideMonitor("locked") end
-        local id2 = os.startTimer(2)
-        timers[id2] = function() if insideMon then drawInsideMonitor("button") end end
+        drawInsideState()
     end
+    return true
 end
 
 local function redraw(newMsg, color, clearAfter)
@@ -368,9 +372,13 @@ local function handleKey(key)
     elseif key == "OK" then
         if #code == 0 then return end
         if bunkerlib.verifyPassword(code, loadHash()) then
-            openDoor()
-            redraw("ACCESS GRANTED", colors.green)
-            if insideMon then drawInsideMonitor("open") end
+            if openDoor() then
+                redraw("ACCESS GRANTED", colors.green)
+                if insideMon then drawInsideMonitor("open") end
+            else
+                redraw("DOOR LOCKED", colors.red, 2)
+                if insideMon then drawInsideMonitor("locked") end
+            end
         else
             redraw("WRONG CODE", colors.red, 2)
         end
@@ -469,6 +477,24 @@ drawInsideMonitor = function(state)
     end
 end
 
+-- Re-render the inside screen from the REAL door driver state, so remote
+-- lock/unlock and close-commands from the control room are reflected even
+-- without a click on this computer.
+drawInsideState = function()
+    if not insideMon then return end
+    local drv = bunkerlib.driver("door")
+    if drv.isLocked and drv.isLocked(DOOR_DEVICE) then
+        drawInsideMonitor("locked")
+        return
+    end
+    local ok, st = pcall(drv.read, DOOR_DEVICE)
+    if ok and st then
+        drawInsideMonitor("open")
+    else
+        drawInsideMonitor("button")
+    end
+end
+
 -- ============ FIND MONITORS ============
 local bestArea = 0
 for _, name in ipairs(peripheral.getNames()) do
@@ -505,6 +531,12 @@ bunkerlib.runClient({
         if event == "timer" then
             local action = timers[p1]
             if action then action(); timers[p1] = nil end
+        elseif event == "rednet_message" then
+            local message, protocol = p2, p3
+            if protocol == "bunker_cmd" and type(message) == "table"
+               and message.room == DOOR_DEVICE.id and message.cmd == "door" then
+                drawInsideState()
+            end
         elseif event == "monitor_touch" then
             if p1 == keypadMonitorName then
                 local g = bunkerlib.gfx
@@ -527,8 +559,11 @@ bunkerlib.runClient({
                 local hitPixel = p2 >= 0 and p2 < px0 + b.w * g.CELL_W
                              and p3 >= 0 and p3 < py0 + b.h * g.CELL_H
                 if hitCell or hitPixel then
-                    openDoor()
-                    drawInsideMonitor("open")
+                    if openDoor() then
+                        drawInsideMonitor("open")
+                    else
+                        drawInsideMonitor("locked")
+                    end
                 end
             end
         end

@@ -51,12 +51,15 @@ lib.printOnce(errs, dev.id, dev.driver.name .. " error (" .. dev.id .. "): " .. 
     end
 
     local lastStatus = {}
+    local lastLockOut = {} -- last BROADCAST lock flag per device
     local lastSet = {} -- last COMMANDED state per device (persisted)
+    local lastLock = {} -- last LOCK state per lockable door (persisted)
     local stateFile = conf.stateFile or "room.state"
 
     -- On boot the client restores the last commanded state of LIGHT devices,
     -- so a reboot leaves the room lit exactly as before - no input needed.
-    -- Doors are NEVER auto-restored (they must stay closed unless opened).
+    -- Doors are NEVER auto-open (they must stay closed), but a LOCKED door
+    -- must stay locked across a reboot, so its lock flag IS restored.
     local function applySavedState()
         if not fs.exists(stateFile) then return end
         local f = fs.open(stateFile, "r")
@@ -78,25 +81,43 @@ lib.printOnce(errs, dev.id, dev.driver.name .. " error (" .. dev.id .. "): " .. 
                     end
                 end
             end
+            if dev.driver.setLock and data.lastLock and data.lastLock[dev.id] ~= nil then
+                local saved = data.lastLock[dev.id]
+                local ok3 = pcall(dev.driver.setLock, dev.conf, saved)
+                if ok3 then
+                    lastLock[dev.id] = saved
+                    term.setTextColor(colors.yellow)
+                    print("restored " .. dev.id .. " -> " .. (saved and "LOCKED" or "unlocked"))
+                    term.setTextColor(colors.white)
+                end
+            end
         end
     end
 
     local function saveState()
         local f = fs.open(stateFile, "w")
         if not f then return end
-        f.write(textutils.serialise({ lastSet = lastSet }))
+        f.write(textutils.serialise({ lastSet = lastSet, lastLock = lastLock }))
         f.close()
     end
     -- `force` = heartbeat: broadcast EVERY device (keeps the control room's
     -- online detection working). Without force: only broadcast what CHANGED,
     -- so quick on/off commands do not re-flood rednet with all devices.
+    -- Lockable doors broadcast their lock flag alongside the door state.
     local function sendStatus(force)
         for _, dev in ipairs(devices) do
             local state = read(dev)
-            if force or lastStatus[dev.id] ~= state then
-                rednet.broadcast({ id = dev.id, cmd = dev.cmd, state = state }, "bunker_status")
+            local lock
+            if dev.driver.isLocked then
+                lock = dev.driver.isLocked(dev.conf) or false
+            end
+            if force or lastStatus[dev.id] ~= state or lastLockOut[dev.id] ~= lock then
+                local msg = { id = dev.id, cmd = dev.cmd, state = state }
+                if lock ~= nil then msg.lock = lock end
+                rednet.broadcast(msg, "bunker_status")
             end
             lastStatus[dev.id] = state
+            lastLockOut[dev.id] = lock
         end
     end
 
@@ -132,12 +153,21 @@ lib.printOnce(errs, dev.id, dev.driver.name .. " error (" .. dev.id .. "): " .. 
             if protocol == "bunker_cmd" and type(message) == "table" and message.cmd then
                 for _, dev in ipairs(devices) do
                     if dev.id == message.room and dev.cmd == message.cmd then
-                        set(dev, message.state)
-                        if dev.cmd == "light" then lastSet[dev.id] = message.state end
+                        if message.lock ~= nil and dev.driver.setLock then
+                            pcall(dev.driver.setLock, dev.conf, message.lock)
+                            lastLock[dev.id] = not not message.lock
+                        else
+                            set(dev, message.state)
+                            if dev.cmd == "light" then lastSet[dev.id] = message.state end
+                        end
                         saveState()
                         sendStatus()
                         term.setTextColor(colors.yellow)
-                        print(dev.id .. ": " .. (message.state and "ON" or "OFF"))
+                        if message.lock ~= nil and dev.driver.setLock then
+                            print(dev.id .. ": " .. (message.lock and "LOCKED" or "unlocked"))
+                        else
+                            print(dev.id .. ": " .. (message.state and "ON" or "OFF"))
+                        end
                         term.setTextColor(colors.white)
                         break
                     end

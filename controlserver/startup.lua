@@ -68,7 +68,10 @@ local MONITOR_PANELS = {
     ["monitor_4"] = { title = "ROOM LIGHTS",     action = "light", header = "LIGHT", entries = rooms },
     ["monitor_7"] = { title = "CORRIDOR LIGHTS", action = "light", header = "LIGHT", entries = aux },
     ["monitor_3"] = { title = "DOORS", sections = {
-        { title = "DOOR",         action = "door",        onText = "OPEN", offText = "CLOSED", entries = doors },
+        { title = "DOOR",         action = "door",        onText = "OPEN", offText = "CLOSED", entries = {
+            { id = "control-door", name = "Control Door", action = "lock", lock = true },
+            { id = "server-door",  name = "Server Access Door" },
+        } },
         { title = "SAFETY DOORS", action = "safety-door", onText = "OPEN", offText = "CLOSED", entries = safetyDoors },
     } },
 }
@@ -333,7 +336,7 @@ local function runControl()
         local header = src.header or "STATE"
         local onText = src.onText or "ON"
         local offText = src.offText or "OFF"
-        local stateW = math.max(#header, #onText, #offText, #"OFFLINE")
+        local stateW = math.max(#header, #onText, #offText, #"OFFLINE", #"LOCKED")
         local zoneRight = btnX - 1
         local zoneLeft = zoneRight - stateW + 1
         local maxName = math.max(3, zoneLeft - 2)
@@ -355,18 +358,19 @@ local function runControl()
             g.cellText(mon.mon, 2, y, name, C.text, rowBg)
             if online then
                 clientCount = clientCount + 1
-                local txt = status.state and onText or offText
+                local locked = entry.lock and status.lock
+                local txt = locked and "LOCKED" or (status.state and onText or offText)
                 local sx = zoneLeft + math.floor((stateW - #txt) / 2)
-                local sc = status.state and C.yellow or C.dim
+                local sc = locked and C.red or (status.state and C.yellow or C.dim)
                 g.cellText(mon.mon, sx, y, txt, sc, rowBg)
             else
                 g.cellText(mon.mon, zoneLeft, y, "OFFLINE", C.red, rowBg)
             end
-            local bc = (online and status.state) and C.green or C.dim
+            local bc = (online and locked) and C.red or ((online and status.state) and C.green or C.dim)
             g.cellFill(mon.mon, btnX, y, btnW, 1, bc)
             g.cellText(mon.mon, btnX, y, label, C.bg, bc)
             g.hline(mon.mon, y * g.CELL_H - 1, C.borderD)
-            btns[y] = { id = entry.id, action = action }
+            btns[y] = { id = entry.id, action = entry.action or action }
         end
         return clientCount
     end
@@ -513,7 +517,7 @@ local function runControl()
     local function statusKey()
         local parts = {}
         for id, s in pairs(statuses) do
-            parts[#parts + 1] = id .. "=" .. tostring(s.state) .. "@" .. tostring(s.senderId)
+            parts[#parts + 1] = id .. "=" .. tostring(s.state) .. "|" .. tostring(s.lock or false) .. "@" .. tostring(s.senderId)
         end
         table.sort(parts)
         return table.concat(parts, "|") .. "|alarm=" .. tostring(alarm)
@@ -536,10 +540,27 @@ local function runControl()
     drawMonitorsIfChanged(true)
 
     -- ---- alarm control (shared by alarm button + console) ----
+    -- Doors participating in the alarm: every panel entry marked `lock = true`
+    -- is a lockable door - the alarm LOCKS it and restoring respects the
+    -- pre-alarm state (a door that was manually closed / locked stays that way).
+    local preAlarm = {}
+    local lockableDoors = {}
+    for _, panel in pairs(MONITOR_PANELS) do
+        local function scan(e)
+            if e.lock then lockableDoors[e.id] = true end
+        end
+        if panel.sections then
+            for _, sec in ipairs(panel.sections) do
+                for _, e in ipairs(sec.entries) do scan(e) end
+            end
+        else
+            for _, e in ipairs(panel.entries or {}) do scan(e) end
+        end
+    end
     local function setAlarm(on)
         alarm = on
         audit("alarm " .. (on and "ON" or "OFF"))
-        local n = bunkerlib.emergencyDoors(statuses, on)
+        local n = bunkerlib.emergencyDoors(statuses, on, preAlarm, lockableDoors)
         drawMonitorsIfChanged(true)
         if on then
             outWrite("ALARM - " .. n .. " safety door(s) CLOSED.", colors.red)
@@ -811,7 +832,7 @@ local function runControl()
         elseif event == "rednet_message" then
             local senderId, message, protocol = p1, p2, p3
             if protocol == "bunker_status" and type(message) == "table" and message.id then
-                bunkerlib.setStatus(statuses, message.id, senderId, message.state, message.cmd)
+                bunkerlib.setStatus(statuses, message.id, senderId, message.state, message.cmd, message.lock)
                 drawMonitorsIfChanged()
             end
         elseif event == "char" then

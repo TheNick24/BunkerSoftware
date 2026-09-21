@@ -43,17 +43,24 @@ end
 -- ------------------------------------------------------------
 local function log(msg)
     local line = "[" .. os.epoch("utc") .. "] " .. tostring(msg)
-    local f = fs.open(LOG_FILE, "a")
-    if f then
-        if f.getSize and f.getSize() > (200 * 1024) then
-            f.close()
-            fs.delete(LOG_FILE)
-            f = fs.open(LOG_FILE, "a")
-        end
+    -- Write failures (e.g. disk full) must NEVER kill the agent: a dead
+    -- agent cannot free space, so logging is best-effort only.
+    local ok2 = pcall(function()
+        local f = fs.open(LOG_FILE, "a")
         if f then
-            f.write(line .. "\n")
-            f.close()
+            if f.getSize and f.getSize() > (200 * 1024) then
+                f.close()
+                fs.delete(LOG_FILE)
+                f = fs.open(LOG_FILE, "a")
+            end
+            if f then
+                f.write(line .. "\n")
+                f.close()
+            end
         end
+    end)
+    if not ok2 then
+        pcall(fs.delete, LOG_FILE)
     end
     print(line)
 end
@@ -529,6 +536,22 @@ local function setActiveMain(path)
     writeFile(BASE_DIR .. "/active.txt", path or "")
 end
 
+-- Delete release directories that are no longer needed. Every deploy stores
+-- the full subsystem in RELEASES_DIR/<releaseId>, and without cleanup those
+-- pile up until the computer's disk is full and deploys start failing.
+-- `keep` must contain the releaseIds that stay (e.g. current + previous).
+local function pruneReleases(keep)
+    if not fs.isDir(RELEASES_DIR) then return end
+    for _, name in ipairs(fs.list(RELEASES_DIR)) do
+        local id = name
+        local p = RELEASES_DIR .. "/" .. name
+        if fs.isDir(p) and not keep[id] then
+            fs.delete(p)
+            log("pruned release " .. id)
+        end
+    end
+end
+
 -- ------------------------------------------------------------
 -- command: release deploy
 -- ------------------------------------------------------------
@@ -550,6 +573,13 @@ local function installRelease(payload)
         reportReleaseState(releaseId, "failed")
         return { ok = false, error = "bad manifest" }
     end
+
+    -- free disk space BEFORE writing the new release: keep only the release
+    -- being installed plus the still-active current/previous ones
+    local keep = { [releaseId] = true }
+    if s.currentRelease then keep[s.currentRelease] = true end
+    if s.previousRelease then keep[s.previousRelease] = true end
+    pruneReleases(keep)
 
     local relBase = manifestUrl:gsub("/manifest%.json$", "")
     local destDir = RELEASES_DIR .. "/" .. releaseId
@@ -813,6 +843,14 @@ if not loadSettings() then
     term.setTextColor(colors.white)
     return
 end
+
+-- Self-heal a full disk BEFORE anything else: keep only the active release
+-- (plus the previous one for rollback) so log writes and deploys succeed
+-- again on the next run - even if a previous agent died mid-install.
+local bootKeep = {}
+if s.currentRelease then bootKeep[s.currentRelease] = true end
+if s.previousRelease then bootKeep[s.previousRelease] = true end
+pcall(pruneReleases, bootKeep)
 
 log("agentd " .. AGENT_VERSION .. " start (device " .. s.deviceId .. ")")
 if not s.registered then register() end
