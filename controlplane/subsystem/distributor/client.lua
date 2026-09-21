@@ -40,7 +40,7 @@ local function runClient(conf)
             errs[dev.id] = nil
             return res
         end
-        bunkerlib.printOnce(errs, dev.id, dev.driver.name .. " error (" .. dev.id .. "): " .. tostring(res))
+        lib.printOnce(errs, dev.id, dev.driver.name .. " error (" .. dev.id .. "): " .. tostring(res))
         return false
     end
     local function set(dev, state)
@@ -109,18 +109,23 @@ lib.printOnce(errs, dev.id, dev.driver.name .. " error (" .. dev.id .. "): " .. 
             local state = read(dev)
             local lock
             if dev.driver.isLocked then
-                lock = dev.driver.isLocked(dev.conf) or false
+                local okL, locked = pcall(dev.driver.isLocked, dev.conf)
+                if okL then lock = locked or false end
             end
             if force or lastStatus[dev.id] ~= state or lastLockOut[dev.id] ~= lock then
                 local msg = { id = dev.id, cmd = dev.cmd, state = state }
                 if lock ~= nil then msg.lock = lock end
-                rednet.broadcast(msg, "bunker_status")
+                local okB, errB = pcall(rednet.broadcast, msg, "bunker_status")
+                if clientMark then
+                    clientMark("out id=" .. tostring(dev.id) .. " ok=" .. tostring(okB) .. (not okB and (" err=" .. tostring(errB)) or ""))
+                end
             end
             lastStatus[dev.id] = state
             lastLockOut[dev.id] = lock
         end
     end
 
+    local function clientLoop()
     term.clear()
     term.setCursorPos(1, 1)
     term.setTextColor(colors.cyan)
@@ -143,14 +148,88 @@ lib.printOnce(errs, dev.id, dev.driver.name .. " error (" .. dev.id .. "): " .. 
     sendStatus(true)
     local statusTimer = os.startTimer(conf.interval)
 
+    -- Boot/heartbeat audit: appended on request so the operator can confirm
+    -- via `log.read path=main` that this client really boots, opens its modem
+    -- and replays statuses (not just that it did not crash).
+    local function clientMark(msg)
+        pcall(function()
+            local d = fs.getDir(shell.getRunningProgram())
+            if not d or d == "" then d = "/" end
+            local fp = fs.combine(d, "client-error.log")
+            if fs.exists(fp) then
+                local sz = fs.getSize(fp)
+                if sz and sz > 16384 then fs.delete(fp) end
+            end
+            local f = fs.open(fp, "a")
+            if f then
+                f.write("@" .. tostring(os.epoch("utc")) .. ": " .. msg .. "\n")
+                f.close()
+            end
+        end)
+    end
+    clientMark("boot: modem=" .. tostring(modem) .. " devices=" .. #devices)
+
+    -- Optional telemetry: periodically read one or more induction matrices and
+    -- broadcast the values under "bunker_energy" so any room can display the
+    -- energy screen. Batteries are keyed by NAME so several can run at once:
+    --   conf.telemetry = { BAT1 = { side = "inductionPort_0", interval = 5 } }
+    -- Each entry: side, protocol (default "bunker_energy"), interval (default
+    -- conf.interval or 10).
+    local telemTimers = {} -- timerId -> battery name
+    local function telemTimerStart(interval)
+        return os.startTimer(interval or conf.interval or 10)
+    end
+    local function broadcastBattery(name)
+        local t = conf.telemetry and conf.telemetry[name]
+        if not t or not t.side then return end
+        -- Fully isolated: a vanished/forming induction port or a rednet
+        -- serialisation error must never kill the client loop.
+        local okR, data = pcall(function()
+            return lib.energy and lib.energy.readInduction(t.side)
+        end)
+        if okR and data then
+            local sent
+            local okB, resB = pcall(function()
+                data.name = name
+                rednet.broadcast(data, t.protocol or "bunker_energy")
+                sent = true
+            end)
+            if not okB or not sent then
+                lib.printOnce(errs, "telem." .. name, "telemetry broadcast failed: " .. tostring(resB))
+            end
+        end
+        local timerId = telemTimerStart(t.interval)
+        telemTimers[timerId] = name
+    end
+    if conf.telemetry and lib.energy then
+        for name in pairs(conf.telemetry) do
+            broadcastBattery(name)
+        end
+    end
+
     while true do
         local event, p1, p2, p3 = os.pullEvent()
         if event == "timer" and p1 == statusTimer then
             sendStatus(true)
             statusTimer = os.startTimer(conf.interval)
+        elseif event == "timer" then
+            local name = telemTimers[p1]
+            if name then
+                telemTimers[p1] = nil
+                broadcastBattery(name)
+            end
         elseif event == "rednet_message" then
             local senderId, message, protocol = p1, p2, p3
-            if protocol == "bunker_cmd" and type(message) == "table" and message.cmd then
+            if protocol == "bunker_status_request" then
+                -- A control-server restart loses its in-memory status table.
+                -- Reply immediately instead of making the monitors wait for
+                -- the next ordinary room heartbeat.
+                sendStatus(true)
+                if conf.telemetry and lib.energy then
+                    for name in pairs(conf.telemetry) do broadcastBattery(name) end
+                end
+                clientMark("request from " .. tostring(senderId) .. " -> replayed")
+            elseif protocol == "bunker_cmd" and type(message) == "table" and message.cmd then
                 for _, dev in ipairs(devices) do
                     if dev.id == message.room and dev.cmd == message.cmd then
                         if message.lock ~= nil and dev.driver.setLock then
@@ -178,6 +257,37 @@ lib.printOnce(errs, dev.id, dev.driver.name .. " error (" .. dev.id .. "): " .. 
         if conf.onEvent then
             pcall(conf.onEvent, event, p1, p2, p3)
         end
+    end
+    end
+
+    -- Supervisor loop: one bad frame must never take the whole client down.
+    -- The room computer re-arms itself (fresh timers, fresh telemetry) instead
+    -- of going silent on rednet until somebody reboots it. Errors are also
+    -- appended beside main.lua so the operator can read them via the agent's
+    -- `log.read` command (payload.path = "main").
+    while true do
+        local ok, err = xpcall(clientLoop, debug.traceback)
+        if ok then break end
+        local okDir, errFile = pcall(function()
+            local d = fs.getDir(shell.getRunningProgram())
+            if not d or d == "" then d = "/" end
+            local fp = fs.combine(d, "client-error.log")
+            if fs.exists(fp) then
+                local sz = fs.getSize(fp)
+                if sz and sz > 16384 then fs.delete(fp) end
+            end
+            local f = fs.open(fp, "a")
+            if f then
+                f.write("@" .. tostring(os.epoch("utc")) .. ": " .. tostring(err) .. "\n")
+                f.close()
+            end
+        end)
+        term.setTextColor(colors.red)
+        term.setCursorPos(1, 1)
+        term.clear()
+        print("Client error; restarting in 5s: " .. tostring(err))
+        term.setTextColor(colors.white)
+        sleep(5)
     end
 end
 

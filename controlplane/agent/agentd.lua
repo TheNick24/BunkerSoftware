@@ -15,7 +15,7 @@
 --   headers   : x-agent-id, x-agent-seq, x-agent-sig
 -- ============================================================
 
-local AGENT_VERSION = "0.1.0"
+local AGENT_VERSION = "0.1.3"
 local BASE_DIR = "/controlplane"
 local SETTINGS_FILE = BASE_DIR .. "/settings.json"
 local SELF_FILE = BASE_DIR .. "/agentd.lua"
@@ -24,6 +24,9 @@ local RELEASES_DIR = BASE_DIR .. "/releases"
 local HEALTH_FILE = "/controlplane/health.marker"
 local CONFIG_FILE = BASE_DIR .. "/config.lua"
 local LAUNCHER_FILE = "/startup.lua"
+local MAX_LOG_BYTES = 16 * 1024
+local MIN_FREE_FOR_ROLLBACK = 128 * 1024
+local MAX_RELEASES = 4
 
 -- Placeholder replaced by the controlplane server at serve time with the
 -- configured AGENT_BASE_URL. Bootstrap can therefore find the server even
@@ -48,7 +51,7 @@ local function log(msg)
     local ok2 = pcall(function()
         local f = fs.open(LOG_FILE, "a")
         if f then
-            if f.getSize and f.getSize() > (200 * 1024) then
+            if f.getSize and f.getSize() > MAX_LOG_BYTES then
                 f.close()
                 fs.delete(LOG_FILE)
                 f = fs.open(LOG_FILE, "a")
@@ -552,6 +555,58 @@ local function pruneReleases(keep)
     end
 end
 
+-- Keep the active release, its rollback, and at most two more recent release
+-- directories. Filesystem timestamps are used only for the extra archive
+-- slots; active/previous always win even if their timestamp is unavailable.
+local function pruneReleaseCount(maxCount)
+    if not fs.isDir(RELEASES_DIR) then return end
+    local releases = {}
+    for _, name in ipairs(fs.list(RELEASES_DIR)) do
+        local path = RELEASES_DIR .. "/" .. name
+        if fs.isDir(path) then
+            local modified = 0
+            local ok, attr = pcall(fs.attributes, path)
+            if ok and type(attr) == "table" then modified = tonumber(attr.modified) or 0 end
+            releases[#releases + 1] = {
+                id = name,
+                modified = modified,
+                protected = name == s.currentRelease or name == s.previousRelease,
+            }
+        end
+    end
+    table.sort(releases, function(a, b)
+        if a.protected ~= b.protected then return a.protected end
+        if a.modified ~= b.modified then return a.modified > b.modified end
+        return a.id > b.id
+    end)
+    for i = maxCount + 1, #releases do
+        fs.delete(RELEASES_DIR .. "/" .. releases[i].id)
+        log("pruned old release " .. releases[i].id)
+    end
+end
+
+local function freeSpace()
+    local ok, n = pcall(fs.getFreeSpace, "/")
+    return ok and type(n) == "number" and n or nil
+end
+
+-- Small CC computers cannot hold current + previous + a complete new release.
+-- Keep rollback data when there is room, but drop the previous release before
+-- installing when capacity is tight so management itself never gets wedged.
+local function freeRollbackSpace()
+    local free = freeSpace()
+    if free and free >= MIN_FREE_FOR_ROLLBACK then return end
+    if s.previousRelease and s.previousRelease ~= s.currentRelease then
+        local old = s.previousRelease
+        s.previousRelease = nil
+        saveSettings()
+        local keep = {}
+        if s.currentRelease then keep[s.currentRelease] = true end
+        pruneReleases(keep)
+        log("pruned rollback release " .. old .. " (low disk space)")
+    end
+end
+
 -- ------------------------------------------------------------
 -- command: release deploy
 -- ------------------------------------------------------------
@@ -574,12 +629,12 @@ local function installRelease(payload)
         return { ok = false, error = "bad manifest" }
     end
 
-    -- free disk space BEFORE writing the new release: keep only the release
-    -- being installed plus the still-active current/previous ones
-    local keep = { [releaseId] = true }
-    if s.currentRelease then keep[s.currentRelease] = true end
-    if s.previousRelease then keep[s.previousRelease] = true end
-    pruneReleases(keep)
+    -- free disk space BEFORE writing the new release. Retain rollback data on
+    -- normal computers, but sacrifice it first on small disks.
+    freeRollbackSpace()
+    -- Make room for the incoming release while preserving up to four total
+    -- versions after installation.
+    pruneReleaseCount(MAX_RELEASES - 1)
 
     local relBase = manifestUrl:gsub("/manifest%.json$", "")
     local destDir = RELEASES_DIR .. "/" .. releaseId
@@ -617,6 +672,9 @@ local function installRelease(payload)
     s.installStatus = "pending"
     setActiveMain(mainPath)
     saveSettings()
+
+    -- Keep a small recent archive but never let releases grow without bound.
+    pruneReleaseCount(MAX_RELEASES)
 
     log("release " .. releaseId .. " installed; health check after reboot")
     return { ok = true, reboot = true }
@@ -675,7 +733,19 @@ local function handleCommand(cmd)
         })
     elseif ctype == "log.read" then
         local n = tonumber((payload and payload.lines) or 100)
-        local raw = readFile(LOG_FILE) or ""
+        local pth = (payload and tostring(payload.path or "")) or ""
+        local target = LOG_FILE
+        if pth == "main" then
+            -- The client supervisor appends its error frames to
+            -- client-error.log right beside the active main.lua.
+            local active = readFile(BASE_DIR .. "/active.txt") or ""
+            target = fs.combine(fs.getDir(active), "client-error.log")
+        elseif pth ~= "" then
+            local clean = pth:gsub("^/+", ""):gsub("%.%.",
+            "")
+            target = fs.combine(BASE_DIR, clean)
+        end
+        local raw = readFile(target) or ""
         local lines = {}
         for line in raw:gmatch("[^\r\n]+") do lines[#lines + 1] = line end
         local tail = {}
@@ -844,13 +914,9 @@ if not loadSettings() then
     return
 end
 
--- Self-heal a full disk BEFORE anything else: keep only the active release
--- (plus the previous one for rollback) so log writes and deploys succeed
--- again on the next run - even if a previous agent died mid-install.
-local bootKeep = {}
-if s.currentRelease then bootKeep[s.currentRelease] = true end
-if s.previousRelease then bootKeep[s.previousRelease] = true end
-pcall(pruneReleases, bootKeep)
+-- Keep the release history bounded on every boot. If the disk is already
+-- tight, freeRollbackSpace below still drops the rollback archive first.
+pcall(pruneReleaseCount, MAX_RELEASES)
 
 log("agentd " .. AGENT_VERSION .. " start (device " .. s.deviceId .. ")")
 if not s.registered then register() end

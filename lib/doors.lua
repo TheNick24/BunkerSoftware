@@ -87,6 +87,46 @@ return function(bunkerlib)
         end,
     }
 
+    -- CREATE SEQUENCED GEARSHIFT DOOR. A door on a pulley/gantry is controlled
+    -- with move(distance, modifier): opening moves it DOWN by `distance`, and
+    -- closing moves it fully UP by the same distance. Unlike redstone doors it
+    -- cannot report its physical position, so we retain the last command.
+    local gearshiftState, gearshiftLock = {}, {}
+    bunkerlib.DRIVERS["gearshift-door"] = {
+        type = "door",
+        name = "gearshift-door",
+        restClosed = true,
+        describe = function(dev)
+            return "SG-" .. (dev.peripheral or "?") .. " [" .. tostring(dev.distance or 5) .. " blocks]"
+        end,
+        read = function(dev)
+            return gearshiftState[dev] or false
+        end,
+        set = function(dev, state)
+            if state and gearshiftLock[dev] then return false end
+            local p = peripheral.wrap(dev.peripheral)
+            if not p or not p.move then error("sequenced gearshift unavailable: " .. tostring(dev.peripheral)) end
+            local direction = tonumber(dev.openDirection) or 1
+            if not state then direction = -direction end
+            p.move(tonumber(dev.distance) or 5, direction)
+            gearshiftState[dev] = not not state
+            return true
+        end,
+        -- Software position update WITHOUT sending a move. Used by the
+        -- reusable gearshift controller after a (possibly multi-step)
+        -- motion finished, so status broadcasts reflect the real travel.
+        mark = function(dev, state)
+            gearshiftState[dev] = not not state
+        end,
+        isLocked = function(dev)
+            return gearshiftLock[dev] or false
+        end,
+        setLock = function(dev, locked)
+            gearshiftLock[dev] = not not locked
+            if locked then bunkerlib.DRIVERS["gearshift-door"].set(dev, false) end
+        end,
+    }
+
     -- Panel actions - `<cmd>` must match the client device `cmd`.
     -- NORMAL (control-room) DOOR: open/close toggle.
     bunkerlib.ACTIONS.door = function(status, id)
