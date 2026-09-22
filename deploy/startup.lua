@@ -35,7 +35,11 @@ local SHARED = {
     { src = "lib/actions.lua",      dest = "actions.lua" },
     { src = "lib/doors.lua",        dest = "doors.lua" },
     { src = "lib/monitor.lua",      dest = "monitor.lua" },
+    { src = "lib/gearshift.lua",    dest = "gearshift.lua" },
+    { src = "lib/gfx.lua",          dest = "gfx.lua" },
+    { src = "lib/energy.lua",       dest = "energy.lua" },
     { src = "lib/client.lua",       dest = "client.lua" },
+    { src = "lib/alarmin.lua",      dest = "alarmin.lua" },
     { src = "deploy/receiver.lua",  dest = "receiver.lua" },
 }
 

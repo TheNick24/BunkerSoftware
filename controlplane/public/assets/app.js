@@ -55,32 +55,52 @@
 
   function showGate() { $("#tokenGate").classList.remove("hidden"); }
 
+  var activeDeviceId = null;
+  var deviceRefreshTimer = null;
+  var deviceFileMap = {};
+  var deviceReleasePage = 1;
+  var deviceReleasePageSize = 10;
+  var deviceReleaseHistory = [];
+  var deviceCmdPage = 1;
+  var deviceCmdPageSize = 5;
+  var deviceCommands = [];
+
   function boot() {
     $("#tokenGate").classList.add("hidden");
     $("#tokenInput").value = token;
     bindNav();
     bindPairing();
-    bindReleases();
+    bindDeploy();
     bindConfig();
+    bindUpdate();
+    bindDevicePanel();
     $("#permClose").addEventListener("click", function () { $("#permModal").classList.add("hidden"); });
     pollStatus();
     loadFleet();
-    loadReleases();
     loadConfig();
     setInterval(loadFleet, 5000);
-    setInterval(loadReleases, 15000);
   }
 
   function bindNav() {
     var buttons = document.querySelectorAll("nav button");
     buttons.forEach(function (b) {
       b.addEventListener("click", function () {
-        buttons.forEach(function (x) { x.classList.remove("active"); });
-        document.querySelectorAll("main section").forEach(function (x) { x.classList.remove("active"); });
-        b.classList.add("active");
-        $("#panel-" + b.dataset.panel).classList.add("active");
+        activatePanel(b.dataset.panel);
+        buttons.forEach(function (x) { x.classList.toggle("active", x === b); });
       });
     });
+  }
+
+  function activatePanel(name) {
+    document.querySelectorAll("main section").forEach(function (x) { x.classList.remove("active"); });
+    var panel = $("#panel-" + name);
+    if (panel) panel.classList.add("active");
+    if (name !== "device") {
+      activeDeviceId = null;
+      stopDeviceRefresh();
+    } else if (activeDeviceId) {
+      loadDevice(activeDeviceId, true);
+    }
   }
 
   function pollStatus() {
@@ -133,13 +153,31 @@
     }
     var relWrap = el.querySelector(".rel-wrap");
     if (relWrap) {
-      var rel = Object.entries(d.releases || {});
-      relWrap.innerHTML = rel.map(function (pair) {
-        var rid = pair[0], st = pair[1];
-        return '<span class="badge release" title="' + esc(st.state || "") + '">' +
-          esc(rid.slice(0, 8)) + (st.state ? ":" + esc(st.state) : "") + "</span>";
-      }).join(" ");
+      var latest = latestRelease(d.releases);
+      var chips = "";
+      if (latest) {
+        chips = '<span class="badge release" title="' + esc(latest.releaseId) + '">' +
+          esc(latest.releaseId.slice(0, 8)) + (latest.state ? ":" + esc(latest.state) : "") + "</span>";
+      }
+      if (d.target && d.target.role) {
+        chips += ' <span class="badge" title="update target (' + esc(d.target.source || "") + ')">' +
+          esc(d.target.role) + "/" + esc(d.target.installation) + "</span>";
+      }
+      relWrap.innerHTML = chips;
     }
+    var upd = el.querySelector('[data-a="update"]');
+    if (upd) upd.disabled = !!el.dataset.updating;
+  }
+
+  function latestRelease(releases) {
+    var best = null;
+    Object.keys(releases || {}).forEach(function (rid) {
+      var st = releases[rid] || {};
+      if (!best || (st.at || 0) >= (best.at || 0)) {
+        best = { releaseId: rid, state: st.state, at: st.at };
+      }
+    });
+    return best;
   }
 
   function deviceCard(d) {
@@ -148,6 +186,8 @@
     el.dataset.id = String(d.id);
     renderCard(el, d);
     el.querySelector('[data-a="reboot"]').addEventListener("click", function () { quickCmd(d.id, "reboot", {}); });
+    el.querySelector('[data-a="details"]').addEventListener("click", function () { openDevice(d.id); });
+    el.querySelector('[data-a="update"]').addEventListener("click", function () { updateDevice(d.id); });
     el.querySelector('[data-a="agent-update"]').addEventListener("click", function () { quickCmd(d.id, "agent.update", {}); });
     el.querySelector('[data-a="rollback"]').addEventListener("click", function () { quickCmd(d.id, "release.rollback", {}); });
     el.querySelector('[data-a="cmd"]').addEventListener("click", function () { customCmd(d.id); });
@@ -170,6 +210,8 @@
       '<div class="row muted seen">last seen ' + relTime(d.lastSeen) + " &middot; seq " + esc(String(d.seq)) + "</div>" +
       '<div class="row rel-wrap"></div>' +
       '<div class="row">' +
+        '<button data-a="details" class="primary">details</button>' +
+        '<button data-a="update" title="Rebuild sources and deploy to this device">update</button>' +
         '<button data-a="reboot">reboot</button>' +
         '<button data-a="agent-update">update agent</button>' +
         '<button data-a="rollback">rollback</button>' +
@@ -324,11 +366,19 @@
   }
 
   function cmdRow(c) {
-    return '<div class="cmd-row">' +
+    var hasPayload = c.payload && Object.keys(c.payload).length;
+    var hasResult = c.result != null;
+    var head =
+      '<button class="linkish cmd-toggle" data-cmd-toggle>▸</button> ' +
       '<span class="type">' + esc(c.type) + "</span>" +
-      ' <span class="t">' + esc(c.id) + " · " + esc(c.status) + " · " + relTime(c.createdAt) + "</span>" +
-      (c.payload && Object.keys(c.payload).length ? "<pre>" + esc(JSON.stringify(c.payload, null, 2)) + "</pre>" : "") +
-      (c.result != null ? "<pre>" + esc(typeof c.result === "string" ? c.result : JSON.stringify(c.result, null, 2)) + "</pre>" : "") +
+      ' <span class="t">' + esc(c.id) + " · " + esc(c.status) + " · " + relTime(c.createdAt) + "</span>";
+    var body = "";
+    if (hasPayload) body += '<pre>' + esc(JSON.stringify(c.payload, null, 2)) + "</pre>";
+    if (hasResult) body += '<pre>' + esc(typeof c.result === "string" ? c.result : JSON.stringify(c.result, null, 2)) + "</pre>";
+    if (!body) body = '<span class="muted">no payload / result</span>';
+    return '<div class="cmd-row collapsed">' +
+      '<div class="cmd-head">' + head + "</div>" +
+      '<div class="cmd-body hidden">' + body + "</div>" +
       "</div>";
   }
 
@@ -374,7 +424,7 @@
     });
   }
 
-  function bindReleases() {
+  function bindDeploy() {
     $("#deployBtn").addEventListener("click", function () {
       var deviceId = $("#depDevice").value;
       var role = $("#depRole").value.trim();
@@ -384,7 +434,7 @@
       api("/api/deploy", { method: "POST", body: { deviceId: deviceId, role: role, installation: installation } })
         .then(function (r) {
           toast("deployed " + role + "/" + installation + " -> #" + deviceId + " (" + r.releaseId + ")", "ok");
-          loadReleases();
+          if (activeDeviceId === deviceId) loadDevice(deviceId, true);
           pollCommand(r.cid, 90);
         })
         .catch(function (e) { toast(e.message, "err"); })
@@ -392,29 +442,382 @@
     });
   }
 
-  function loadReleases() {
-    api("/api/releases").then(function (data) {
-      var rel = data.releases || {};
-      var tbody = $("#releaseRows");
-      var entries = Object.entries(rel);
-      tbody.innerHTML = "";
-      $("#releaseEmpty").style.display = entries.length ? "none" : "";
-      entries.forEach(function (pair) {
-        var rid = pair[0], m = pair[1];
-        var tr = document.createElement("tr");
-        var targets = Object.entries(m.targets || {}).map(function (t) {
-          return '<span class="badge release" title="">#' + esc(t[0]) + ":" + esc(t[1].state || "") + "</span>";
-        }).join(" ");
-        tr.innerHTML =
-          "<td>" + esc(rid.slice(0, 10)) + "</td>" +
-          "<td>" + esc(m.role || "") + "</td>" +
-          "<td>" + esc(m.installation || "") + "</td>" +
-          "<td class='muted'>" + relTime(m.created) + "</td>" +
-          "<td>" + esc(String((m.files || []).length)) + "</td>" +
-          "<td>" + targets + "</td>";
-        tbody.appendChild(tr);
+  function bindUpdate() {
+    $("#updateFleetBtn").addEventListener("click", function () {
+      if (!confirm("Rebuild from current sources and deploy to every paired device?")) return;
+      runUpdate(null, $("#updateFleetBtn"));
+    });
+  }
+
+  function updateDevice(deviceId) {
+    var card = document.querySelector('.card[data-id="' + deviceId + '"]');
+    runUpdate(String(deviceId), card && card.querySelector('[data-a="update"]'), card);
+  }
+
+  function runUpdate(deviceId, btn, card) {
+    if (btn) btn.disabled = true;
+    if (card) card.dataset.updating = "1";
+    var label = deviceId ? "#" + deviceId : "fleet";
+    toast("rebuilding sources and updating " + label + "…", "ok");
+    var url = deviceId ? "/api/devices/" + deviceId + "/update" : "/api/update";
+    api(url, { method: "POST", body: deviceId ? {} : {} })
+      .then(function (r) {
+        var results = r.results || [{
+          deviceId: deviceId,
+          cid: r.cid,
+          releaseId: r.releaseId,
+          role: r.role,
+          installation: r.installation,
+        }];
+        var okRows = results.filter(function (x) { return !x.error && x.cid; });
+        var badRows = results.filter(function (x) { return x.error; });
+        badRows.forEach(function (x) {
+          toast("update #" + x.deviceId + " skipped: " + x.error, "err");
+        });
+        if (!okRows.length) {
+          toast("nothing deployed", "err");
+          return Promise.reject(new Error("nothing deployed"));
+        }
+        toast("deploying " + okRows.length + " release(s)…", "ok");
+        if (activeDeviceId) loadDevice(activeDeviceId, true);
+        return Promise.all(okRows.map(function (row) {
+          return waitCommand(row.cid, 120).then(function () { return row; });
+        })).then(function (rows) {
+          return waitForHealth(rows.map(function (row) { return row.releaseId; }), 90);
+        }).then(function (states) {
+          var failed = states.filter(function (s) { return s.state !== "healthy"; });
+          if (failed.length) {
+            failed.forEach(function (s) {
+              toast("release " + s.releaseId.slice(0, 8) + " -> " + s.state, "err");
+            });
+          } else {
+            toast("update complete: " + okRows.length + " device(s) healthy", "ok");
+          }
+          loadFleet();
+        });
+      })
+      .catch(function (e) {
+        if (e && e.message !== "nothing deployed") toast(e.message, "err");
+      })
+      .finally(function () {
+        if (btn) btn.disabled = false;
+        if (card) delete card.dataset.updating;
+        loadFleet();
       });
-    }).catch(function () {});
+  }
+
+  function waitForHealth(releaseIds, seconds) {
+    var end = Date.now() + seconds * 1000;
+    var unique = Array.from(new Set(releaseIds));
+    return new Promise(function (resolve, reject) {
+      var tick = function () {
+        api("/api/fleet").then(function (devices) {
+          var states = [];
+          var pending = false;
+          unique.forEach(function (rid) {
+            var found = null;
+            devices.forEach(function (d) {
+              if (d.releases && d.releases[rid]) found = d.releases[rid].state || "pending";
+            });
+            if (!found) found = "pending";
+            if (found === "pending") pending = true;
+            states.push({ releaseId: rid, state: found });
+          });
+          if (!pending) return resolve(states);
+          if (Date.now() > end) return resolve(states);
+          setTimeout(tick, 2500);
+        }).catch(function () {
+          if (Date.now() > end) return reject(new Error("health wait timed out"));
+          setTimeout(tick, 2500);
+        });
+      };
+      setTimeout(tick, 2000);
+    });
+  }
+
+  function openDevice(deviceId) {
+    activeDeviceId = deviceId;
+    deviceReleasePage = 1;
+    deviceCmdPage = 1;
+    document.querySelectorAll("nav button").forEach(function (x) { x.classList.remove("active"); });
+    activatePanel("device");
+    loadDevice(deviceId, true);
+  }
+
+  function bindDevicePanel() {
+    $("#deviceBack").addEventListener("click", function () {
+      activeDeviceId = null;
+      stopDeviceRefresh();
+      var fleetBtn = document.querySelector('nav button[data-panel="fleet"]');
+      if (fleetBtn) fleetBtn.click();
+      else activatePanel("fleet");
+    });
+    $("#deviceActions").addEventListener("click", function (e) {
+      var btn = e.target.closest("button[data-a]");
+      if (!btn || !activeDeviceId) return;
+      var id = activeDeviceId;
+      if (btn.dataset.a === "update") {
+        runUpdate(String(id), btn);
+      } else if (btn.dataset.a === "reboot") {
+        quickCmd(id, "reboot", {});
+      } else if (btn.dataset.a === "agent-update") {
+        quickCmd(id, "agent.update", {});
+      } else if (btn.dataset.a === "rollback") {
+        quickCmd(id, "release.rollback", {});
+      } else if (btn.dataset.a === "cmd") {
+        customCmd(id);
+      } else if (btn.dataset.a === "perms") {
+        openPeripherals(id);
+      }
+    });
+    $("#deviceReleaseRows").addEventListener("click", function (e) {
+      var btn = e.target.closest("[data-files]");
+      if (!btn) return;
+      toggleReleaseFiles(btn.dataset.files);
+    });
+    $("#deviceReleasePager").addEventListener("click", function (e) {
+      var btn = e.target.closest("button[data-page]");
+      if (!btn || btn.disabled) return;
+      gotoReleasePage(Number(btn.dataset.page));
+    });
+    $("#deviceCmdPager").addEventListener("click", function (e) {
+      var btn = e.target.closest("button[data-cmd-page]");
+      if (!btn || btn.disabled) return;
+      gotoCmdPage(Number(btn.dataset.cmdPage));
+    });
+    document.addEventListener("click", function (e) {
+      var t = e.target.closest("[data-cmd-toggle]");
+      if (!t) return;
+      var row = t.closest(".cmd-row");
+      if (!row) return;
+      var body = row.querySelector(".cmd-body");
+      if (!body) return;
+      var open = !row.classList.contains("collapsed");
+      row.classList.toggle("collapsed", open);
+      body.classList.toggle("hidden", open);
+      t.textContent = open ? "▸" : "▾";
+    });
+  }
+
+  function toggleReleaseFiles(rid) {
+    var box = $("#deviceReleaseFiles");
+    if (box.dataset.rid === rid) {
+      box.classList.add("hidden");
+      box.dataset.rid = "";
+      box.innerHTML = "";
+      return;
+    }
+    var list = deviceFileMap[rid] || [];
+    box.dataset.rid = rid;
+    box.classList.remove("hidden");
+    box.innerHTML = list.length
+      ? '<div class="rel-files">' + list.map(function (f) {
+          return '<div><span class="path">' + esc(f.path) + '</span> <span class="hash">' + esc(String(f.hash || "").slice(0, 12)) + "</span></div>";
+        }).join("") + "</div>"
+      : '<div class="rel-files muted">No file manifest for this release.</div>';
+  }
+
+  function gotoReleasePage(page) {
+    var total = deviceReleaseHistory.length;
+    var pages = Math.max(1, Math.ceil(total / deviceReleasePageSize));
+    if (!total) return;
+    if (page < 1) page = 1;
+    if (page > pages) page = pages;
+    deviceReleasePage = page;
+    hideReleaseFiles();
+    renderReleaseHistory();
+  }
+
+  function hideReleaseFiles() {
+    var box = $("#deviceReleaseFiles");
+    box.classList.add("hidden");
+    box.dataset.rid = "";
+    box.innerHTML = "";
+  }
+
+  function pageWindow(page, pages) {
+    if (pages <= 7) {
+      var all = [];
+      for (var i = 1; i <= pages; i++) all.push(i);
+      return all;
+    }
+    var nums = [1];
+    var start = Math.max(2, page - 1);
+    var end = Math.min(pages - 1, page + 1);
+    if (start > 2) nums.push("…");
+    for (var n = start; n <= end; n++) nums.push(n);
+    if (end < pages - 1) nums.push("…");
+    nums.push(pages);
+    return nums;
+  }
+
+  function renderReleasePager(history) {
+    var pager = $("#deviceReleasePager");
+    var total = history.length;
+    if (!total) { pager.innerHTML = ""; return; }
+    var pages = Math.max(1, Math.ceil(total / deviceReleasePageSize));
+    if (deviceReleasePage > pages) deviceReleasePage = pages;
+    var page = deviceReleasePage;
+    var from = (page - 1) * deviceReleasePageSize + 1;
+    var to = Math.min(total, page * deviceReleasePageSize);
+    var html = "";
+    html += '<button data-page="' + (page - 1) + '"' + (page <= 1 ? " disabled" : "") + ">&larr;</button>";
+    pageWindow(page, pages).forEach(function (p) {
+      if (p === "…") {
+        html += '<span class="dots">&hellip;</span>';
+        return;
+      }
+      html += '<button data-page="' + p + '"' + (p === page ? ' class="on"' : "") + ">" + p + "</button>";
+    });
+    html += '<button data-page="' + (page + 1) + '"' + (page >= pages ? " disabled" : "") + ">&rarr;</button>";
+    html += '<span class="meta">Seite ' + page + " / " + pages + " &middot; " + from + "&ndash;" + to + " von " + total + " Releases</span>";
+    pager.innerHTML = html;
+  }
+
+  function renderReleaseHistory() {
+    var history = deviceReleaseHistory;
+    var tbody = $("#deviceReleaseRows");
+    renderReleasePager(history);
+    if (!history.length) {
+      tbody.innerHTML = "";
+      $("#deviceReleaseEmpty").style.display = "";
+      hideReleaseFiles();
+      return;
+    }
+    $("#deviceReleaseEmpty").style.display = "none";
+    var pages = Math.max(1, Math.ceil(history.length / deviceReleasePageSize));
+    if (deviceReleasePage > pages) deviceReleasePage = pages;
+    var start = (deviceReleasePage - 1) * deviceReleasePageSize;
+    var slice = history.slice(start, start + deviceReleasePageSize);
+    tbody.innerHTML = slice.map(function (h) {
+      var state = h.state || "unknown";
+      var stateCls = state === "healthy" ? "online" : (state === "failed" ? "offline" : "");
+      return '<tr' + (h.current ? ' class="rel-current"' : "") + ">" +
+        "<td><code>" + esc(h.releaseId.slice(0, 10)) + "</code>" +
+          (h.current ? ' <span class="chip">current</span>' : "") + "</td>" +
+        "<td>" + esc(h.role || "—") + "</td>" +
+        "<td>" + esc(h.installation || "—") + "</td>" +
+        '<td><span class="badge ' + stateCls + '">' + esc(state) + "</span></td>" +
+        '<td class="muted" title="' + esc(String(h.at || "")) + '">' + relTime(h.at) + "</td>" +
+        '<td class="muted" title="' + esc(String(h.created || "")) + '">' + relTime(h.created) + "</td>" +
+        "<td>" + esc(String(h.fileCount || 0)) +
+          ' <button class="linkish" data-files="' + esc(h.releaseId) + '">show</button></td>' +
+        "</tr>";
+    }).join("");
+  }
+
+  function stopDeviceRefresh() {
+    if (deviceRefreshTimer) {
+      clearInterval(deviceRefreshTimer);
+      deviceRefreshTimer = null;
+    }
+  }
+
+  function loadDevice(deviceId, restartTimer) {
+    activeDeviceId = deviceId;
+    api("/api/devices/" + deviceId).then(function (dev) {
+      if (activeDeviceId !== String(deviceId) && activeDeviceId !== deviceId) return;
+      renderDeviceDetail(dev);
+      if (restartTimer) {
+        stopDeviceRefresh();
+        deviceRefreshTimer = setInterval(function () {
+          if (!activeDeviceId) return stopDeviceRefresh();
+          loadDevice(activeDeviceId, false);
+        }, 15000);
+      }
+    }).catch(function (e) {
+      if (e.status === 401) { showGate(); return; }
+      $("#deviceHead").innerHTML = '<div class="banner err">' + esc(e.message || "load failed") + "</div>";
+    });
+  }
+
+  function renderDeviceDetail(dev) {
+    var online = dev.lastSeen && Date.now() - dev.lastSeen < 70000;
+    var history = dev.releaseHistory || [];
+    var current = history[0] || null;
+    $("#deviceHead").innerHTML =
+      '<span class="name">' + esc(dev.label || ("device " + dev.id)) + "</span>" +
+      '<span class="id">#' + esc(String(dev.id)) + "</span>" +
+      '<span class="badge state ' + (online ? "online" : "offline") + '">' + (online ? "online" : "offline") + "</span>";
+
+    var tiles = [
+      { k: "Agent", v: dev.agentVersion || "unknown" },
+      { k: "Last seen", v: relTime(dev.lastSeen) },
+      { k: "Seq", v: String(dev.seq) },
+      { k: "Target role", v: dev.target && dev.target.role ? dev.target.role + "/" + dev.target.installation : "—" , mono: true },
+      { k: "Target source", v: (dev.target && dev.target.source) || "—" },
+      { k: "Current release", v: current ? current.releaseId.slice(0, 12) + (current.state ? " · " + current.state : "") : "—", mono: true },
+      { k: "Releases deployed", v: String(history.length) },
+      { k: "Label source", v: dev.labelSource || "manual" },
+    ];
+    $("#deviceInfo").innerHTML = tiles.map(function (t) {
+      return '<div class="info-tile"><div class="k">' + esc(t.k) + '</div><div class="v' +
+        (t.mono ? " mono" : "") + '">' + esc(t.v) + "</div></div>";
+    }).join("");
+
+    $("#deviceActions").innerHTML =
+      '<button data-a="update" class="primary" title="Rebuild sources and deploy">update</button>' +
+      '<button data-a="reboot">reboot</button>' +
+      '<button data-a="agent-update">update agent</button>' +
+      '<button data-a="rollback">rollback</button>' +
+      '<button data-a="cmd">command…</button>' +
+      '<button data-a="perms">peripherals</button>';
+
+    deviceReleaseHistory = history;
+    var payload = {};
+    history.forEach(function (h) { payload[h.releaseId] = h.files || []; });
+    deviceFileMap = payload;
+    renderReleaseHistory();
+
+    deviceCommands = dev.recentCommands || [];
+    renderCommands();
+  }
+
+  function gotoCmdPage(page) {
+    var total = deviceCommands.length;
+    var pages = Math.max(1, Math.ceil(total / deviceCmdPageSize));
+    if (!total) return;
+    if (page < 1) page = 1;
+    if (page > pages) page = pages;
+    deviceCmdPage = page;
+    renderCommands();
+  }
+
+  function renderCmdPager() {
+    var pager = $("#deviceCmdPager");
+    var total = deviceCommands.length;
+    if (!total) { pager.innerHTML = ""; return; }
+    var pages = Math.max(1, Math.ceil(total / deviceCmdPageSize));
+    if (deviceCmdPage > pages) deviceCmdPage = pages;
+    var page = deviceCmdPage;
+    var from = (page - 1) * deviceCmdPageSize + 1;
+    var to = Math.min(total, page * deviceCmdPageSize);
+    var html = "";
+    html += '<button data-cmd-page="' + (page - 1) + '"' + (page <= 1 ? " disabled" : "") + ">&larr;</button>";
+    pageWindow(page, pages).forEach(function (p) {
+      if (p === "…") {
+        html += '<span class="dots">&hellip;</span>';
+        return;
+      }
+      html += '<button data-cmd-page="' + p + '"' + (p === page ? ' class="on"' : "") + ">" + p + "</button>";
+    });
+    html += '<button data-cmd-page="' + (page + 1) + '"' + (page >= pages ? " disabled" : "") + ">&rarr;</button>";
+    html += '<span class="meta">Seite ' + page + " / " + pages + " &middot; " + from + "&ndash;" + to + " von " + total + " Commands</span>";
+    pager.innerHTML = html;
+  }
+
+  function renderCommands() {
+    var box = $("#deviceCommands");
+    renderCmdPager();
+    if (!deviceCommands.length) {
+      box.innerHTML = '<div class="muted">No commands recorded.</div>';
+      return;
+    }
+    var pages = Math.max(1, Math.ceil(deviceCommands.length / deviceCmdPageSize));
+    if (deviceCmdPage > pages) deviceCmdPage = pages;
+    var start = (deviceCmdPage - 1) * deviceCmdPageSize;
+    var slice = deviceCommands.slice(start, start + deviceCmdPageSize);
+    box.innerHTML = slice.map(cmdRow).join("");
   }
 
   function loadConfig() {

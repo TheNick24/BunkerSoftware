@@ -23,7 +23,9 @@ local UPDATE_INTERVAL = 20
 -- Periodically re-ask all clients for their full state, so a room that was
 -- rebooting (update wave) or that missed a heartbeat comes back online
 -- within at most this many seconds instead of showing OFFLINE.
-local STATUS_RESYNC_INTERVAL = 60
+-- Must stay well below the 25s cleanStatuses expiry (see below) or rooms
+-- flap OFFLINE between resyncs when their regular heartbeats are delayed.
+local STATUS_RESYNC_INTERVAL = 15
 
 -- The room itself always runs (lights, monitors, status) - only the command
 -- console needs the password. It starts LOCKED and re-locks after inactivity.
@@ -53,8 +55,16 @@ local aux = {
 -- Doors. Same pattern as the light groups.
 local doors = {
     { id = "Control Door 1", name = "Control Door 1" },
-    { id = "server-door", name = "Server Access Door"},
     { id = "Control Door 2", name = "Control Door 2" },
+    { id = "server-door", name = "Server Access Door"},
+}
+
+-- Alarm sirens (Mekanism Industrial Alarm etc.): OUTPUTS powered while the
+-- alarm is ON. Same pattern as the light groups - one row per redstone
+-- relay/side on a client. To add another block: entry here (unique id) +
+-- matching device row in the client's DEVICES list.
+local alarmSirens = {
+    { id = "alarm-siren", name = "Mekanism Alarm" },
 }
 
 -- Safety doors: ALARM doors that normally stand OPEN and only close in an
@@ -74,11 +84,12 @@ local MONITOR_PANELS = {
     ["monitor_7"] = { title = "CORRIDOR LIGHTS", action = "light", header = "LIGHT", entries = aux },
     ["monitor_3"] = { title = "DOORS", sections = {
         { title = "DOOR",         action = "door",        onText = "OPEN", offText = "CLOSED", entries = {
-            { id = "Control Door 1", name = "Control Door 1", action = "lock", lock = true },
-            { id = "server-door",  name = "Server Access Door" },
+            { id = "Control Door 1", name = "Control Door 1",    action = "lock", lock = true },
             { id = "Control Door 2", name = "Control Door 2", action = "lock", lock = true },
+            { id = "server-door",  name = "Server Access Door" },
         } },
         { title = "SAFETY DOORS", action = "safety-door", onText = "OPEN", offText = "CLOSED", entries = safetyDoors },
+        { title = "ALARM",        action = "alarm",       onText = "ON",   offText = "OFF",   entries = alarmSirens },
     } },
 }
 
@@ -230,6 +241,8 @@ local function runControl()
     local buttons = {} -- buttons[monitorName][y] = { id, action }
     local statuses = {}
     local energyData = {} -- battery name -> latest bunker_energy telemetry
+    local energyRx = 0 -- energy messages received since last flush (load signal)
+    local lastEnergyDraw = 0 -- epoch ms of last energy-triggered monitor redraw
     local alarm = false -- true = emergency: all safety doors CLOSED
 
     -- ---- output scrollback ----
@@ -584,9 +597,19 @@ local function runControl()
             for _, e in ipairs(panel.entries or {}) do scan(e) end
         end
     end
+    -- Power every alarm siren in the group (Mekanism Industrial Alarm, ...).
+    local function setAlarmSirens(on)
+        for _, s in ipairs(alarmSirens) do
+            local st = statuses[s.id]
+            if st and st.senderId then
+                rednet.send(st.senderId, { room = s.id, cmd = "alarm", state = on }, "bunker_cmd")
+            end
+        end
+    end
     local function setAlarm(on)
         alarm = on
         audit("alarm " .. (on and "ON" or "OFF"))
+        setAlarmSirens(on)
         local n = bunkerlib.emergencyDoors(statuses, on, preAlarm, lockableDoors)
         drawMonitorsIfChanged(true)
         if on then
@@ -811,7 +834,17 @@ local function runControl()
     drawPrompt()
 -- Stack traceable diagnosis: who receives bunker_status from which sender.
     -- Written beside this program; read back via log.read path=main.
-    local function serverMark(msg)
+    -- Diagnostic log, written beside this program, read back via
+    -- `log.read path=main`. BUFFERED on purpose: rednet traffic (especially
+    -- the ~500 ms bunker_energy flood) previously caused one disk
+    -- open/write/close per message - exactly the CPU load that makes CC
+    -- computers tick slower (timers fire late -> rooms drop OFFLINE).
+    -- Lines are flushed together on each status tick instead.
+    local markBuf = {}
+    local function flushMarks()
+        if #markBuf == 0 then return end
+        local lines = table.concat(markBuf, "\n")
+        markBuf = {}
         pcall(function()
             local d = fs.getDir(shell.getRunningProgram())
             if not d or d == "" then d = "/" end
@@ -822,10 +855,14 @@ local function runControl()
             end
             local f = fs.open(fp, "a")
             if f then
-                f.write("@" .. tostring(os.epoch("utc")) .. ": " .. msg .. "\n")
+                f.write(lines .. "\n")
                 f.close()
             end
         end)
+    end
+    local function serverMark(msg)
+        if #markBuf >= 64 then flushMarks() end
+        markBuf[#markBuf + 1] = "@" .. tostring(os.epoch("utc")) .. ": " .. msg
     end
     -- Ask all running clients for an immediate full state after this server
     -- restarts. Clients still send their normal heartbeats afterwards.
@@ -847,6 +884,9 @@ local function runControl()
             local force = (tick % 2 == 1)
             drawMonitorsIfChanged(force)
             tick = tick + 1
+            serverMark("flush tick=" .. tostring(tick) .. " energyRx=" .. tostring(energyRx))
+            energyRx = 0
+            flushMarks()
             updateTimer = os.startTimer(UPDATE_INTERVAL)
         elseif event == "timer" and p1 == syncTimer then
             rednet.broadcast({ request = "status" }, "bunker_status_request")
@@ -870,7 +910,8 @@ local function runControl()
                     end
                     local btn = btns[y]
                     if btn then
-                        if btn.id == "__ALARM__" then
+                        if btn.id == "__ALARM__" or btn.action == "alarm" then
+                            -- Alarm group row / big ALARM button: same toggle.
                             setAlarm(not alarm)
                         else
                             local status = statuses[btn.id]
@@ -888,14 +929,21 @@ local function runControl()
             end
         elseif event == "rednet_message" then
             local senderId, message, protocol = p1, p2, p3
-            serverMark("rednet proto=" .. tostring(protocol) .. " from=" .. tostring(senderId))
             if protocol == "bunker_status" and type(message) == "table" and message.id then
                 bunkerlib.setStatus(statuses, message.id, senderId, message.state, message.cmd, message.lock)
                 serverMark("status id=" .. tostring(message.id) .. " state=" .. tostring(message.state and 1 or 0) .. " from=" .. tostring(senderId))
                 drawMonitorsIfChanged()
             elseif protocol == "bunker_energy" and type(message) == "table" then
+                energyRx = energyRx + 1
                 energyData[tostring(message.name or "Battery - 1")] = message
-                drawMonitorsIfChanged()
+                -- A fast energy flood must not repaint all monitors each time.
+                -- Redraw at most every 2 s (statusKey includes energy, so the
+                -- energy change alone would otherwise trigger a full repaint).
+                local now = os.epoch("utc")
+                if now - lastEnergyDraw >= 2000 then
+                    lastEnergyDraw = now
+                    drawMonitorsIfChanged()
+                end
             end
         elseif event == "char" then
             if not locked then resetLockTimer() end
@@ -958,6 +1006,8 @@ local function runControl()
         -- well over ten seconds. Using only 10s would briefly flash every
         -- component OFFLINE during update waves; 25s absorbs those reboots
         -- while still detecting a truly dead computer within half a minute.
+        -- STATUS_RESYNC_INTERVAL (15s) re-asks every client before this
+        -- window closes, so a missed regular heartbeat does not flap OFFLINE.
         bunkerlib.cleanStatuses(statuses, 25)
     end
 end

@@ -8,15 +8,16 @@ Custom operating system / control system for a bunker network in ComputerCraft.
 - `lib/network.lua` - Modems (`findModem`) + `printOnce`
 - `lib/crypto.lua` - SHA-256 + PBKDF2 password hashing (`hashPassword`/`verifyPassword`)
 - `lib/status.lua` - Device status cache (`setStatus`, `cleanStatuses`)
-- `lib/drivers.lua` - Base transports (`relay`, `redstone`) + protected relay access
+- `lib/drivers.lua` - Base transports (`relay`, `redstone`) + protected relay access + input reads (`relayGetInput`)
 - `lib/doors.lua` - Door controllers (own driver + action per type: `door`, `safety-door`)
 - `lib/actions.lua` - Generic panel actions (`light`)
 - `lib/monitor.lua` - Monitor rendering (headers, toggle tables, panels, footer)
 - `lib/client.lua` - Room client runtime (`runClient`)
+- `lib/alarmin.lua` - Redstone alarm-input polling (`bunkerlib.alarmin.create`) for wired panic/trigger inputs
 - `controlserver/startup.lua` - ControlServer software (control room computer with the monitor panels)
 - `client/entrance/startup.lua` - Room client (Entrance) - device control, rednet status
 - `client/meroom/startup.lua` - Room client (ME-Core) - device control, rednet status
-- `client/control/startup.lua` - Door keypad + client on the separate **Control** computer (door devices + keypad/inside monitors)
+- `client/control/startup.lua` - Door keypad + client on the separate **Control** computer (door devices + keypad/inside monitors + Mekanism alarm siren on `redstone_relay_9`/back)
 - `client/distributor1/startup.lua` - Room client (Distributor_1) - device control, rednet status
 - `remote/startup.lua` - Remote CLI (e.g. pocket computer) - list/control devices from the shell
 - `deploy/startup.lua` - Deploy tool (push files to every computer over rednet)
@@ -53,6 +54,48 @@ A **device** is just { `id`, `cmd`, `driver`, ... }. Two independent concepts:
 Patch protocol: clients broadcast `{ id, cmd, state }` on `bunker_status`;
 the control (or any remote) sends `{ room, cmd, state }` on `bunker_cmd`.
 
+## Alarm (Mekanism Industrial Alarm / sirens)
+
+The alarm is started from the UI (big ALARM button, ALARM row on the DOORS
+monitor) or the console (`alarm on`). `setAlarm(true)` then:
+
+1. closes safety doors and locks lockable doors (red `!! ALARM !!` banner)
+2. powers every entry in the **`alarmSirens` group** so external alarm
+   blocks (e.g. Mekanism **Industrial Alarm**) make sound
+
+There is **no** redstone alarm *input* — redstone is only the *output* to
+the sirens.
+
+### Wiring one Mekanism alarm
+
+1. Place the Industrial Alarm next to a redstone relay (or run redstone to it)
+2. Control client (`client/control/startup.lua`) — one device row:
+
+```lua
+{ id = "alarm-siren", cmd = "alarm", driver = "relay",
+  relay = "redstone_relay_9", side = "back" },
+```
+
+3. Control server (`controlserver/startup.lua`) — same id in the group:
+
+```lua
+local alarmSirens = {
+    { id = "alarm-siren", name = "Mekanism Alarm" },
+}
+```
+
+When the alarm goes ON, the client gets `{ room = id, cmd = "alarm",
+state = true }` and switches the relay. Alarm OFF cuts power again.
+
+### Adding another alarm block later
+
+1. New relay/side (or another computer + its own device row)
+2. New unique `id` in **both** lists (`DEVICES` + `alarmSirens`)
+3. Deploy — all sirens in the group fire together with the alarm
+
+The group is shown as the `ALARM` section on `monitor_3` (same toggle as
+the big button).
+
 ## Setup
 
 > **Important:** The whole `lib/` bundle must be copied to **every** computer,
@@ -69,21 +112,21 @@ the control (or any remote) sends `{ room, cmd, state }` on `bunker_cmd`.
    - `rooms` table (room device IDs + names)
    - `aux` table for special devices (e.g. corridor lamps) - NOT part of a room
 - `MONITOR_PANELS` assigns each monitor a device group - one entry per
-     device list (`rooms`, `aux`, `doors`, `safetyDoors`, ...). A single
-     monitor can show several groups via `sections`:
-     ```
-     local MONITOR_PANELS = {
-         ["monitor_4"] = { title = "ROOM LIGHTS",     action = "light", header = "LIGHT", entries = rooms },
-         ["monitor_7"] = { title = "CORRIDOR LIGHTS", action = "light", header = "LIGHT", entries = aux   },
-         ["monitor_3"] = { title = "DOORS", sections = {
-             { title = "DOOR",         action = "door",        onText = "OPEN", offText = "CLOSED", entries = doors },
-             { title = "SAFETY DOORS", action = "safety-door", onText = "OPEN", offText = "CLOSED", entries = safetyDoors },
-         } },
-     }
-     ```
-     `action` must match the client `cmd`. `header` is the state column
-     title. Monitors not listed show an info placeholder. New devices only
-     need an entry in a list + one row here.
+      device list (`rooms`, `aux`, `doors`, `safetyDoors`, ...). A single
+      monitor can show several groups via `sections`:
+      ```
+      local MONITOR_PANELS = {
+          ["monitor_4"] = { title = "ROOM LIGHTS",     action = "light", header = "LIGHT", entries = rooms },
+          ["monitor_7"] = { title = "CORRIDOR LIGHTS", action = "light", header = "LIGHT", entries = aux   },
+          ["monitor_3"] = { title = "DOORS", sections = {
+              { title = "DOOR",         action = "door",        onText = "OPEN", offText = "CLOSED", entries = doors },
+              { title = "SAFETY DOORS", action = "safety-door", onText = "OPEN", offText = "CLOSED", entries = safetyDoors },
+          } },
+      }
+      ```
+      `action` must match the client `cmd`. `header` is the state column
+      title. Monitors not listed show an info placeholder. New devices only
+      need an entry in a list + one row here.
 4. Start the program. On the first start (no password yet) it prompts
    **directly inside the running system** for a new password (min. 6
    characters) - after that the console boots locked. To change the
@@ -142,8 +185,12 @@ run `control setup` in the control room (deployed clients: `main setup`).
   - `list` - show all known device states
   - `help`, `exit`
   While an alarm is active every monitor shows a red `!! ALARM !!` banner.
-  The dedicated `monitor_13` shows a big tappable `ALARM` button instead;
+  The dedicated `monitor_14` shows a big tappable `ALARM` button instead;
   tap it to start/stop the emergency without the terminal.
+  The control room powers a **Mekanism Industrial Alarm** (or any redstone
+  alarm block) while the alarm is ON: device `alarm-siren` on
+  `redstone_relay_9` / `back`. Add more sirens to `alarmSirens` +
+  `DEVICES`. See **Alarm (Mekanism Industrial Alarm / sirens)** above.
   The control room learns each device's `cmd` type from the status broadcasts,
   so the console works for lights, doors and safety doors alike.
 

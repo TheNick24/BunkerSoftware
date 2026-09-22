@@ -49,14 +49,18 @@ local GEARSHIFT_INSIDE_MONITOR = "monitor_21"
 local DEVICES = {
     { id = "control",            cmd = "light", driver = "relay",    relay = "redstone_relay_9",  side = "top" },
     { id = "control-corridor-1", cmd = "light", driver = "relay",    relay = "redstone_relay_9",  side = "right" },
+    -- Mekanism Industrial Alarm (or any alarm block): powered ON with the alarm.
+    -- Extra sirens: add a row here + the same id in alarmSirens (controlserver).
+    { id = "alarm-siren", cmd = "alarm", driver = "relay",
+      relay = "redstone_relay_9", side = "back" },
     { id = "Control Door 1",     cmd = "door",  driver = "door",  peripheral = "redstone_relay_10", side = "left" },
     { id = "server-door", cmd = "door", driver = "door", peripheral = "redstone_relay_13", side = "bottom" },
     { id = GEARSHIFT_DOOR_ID, cmd = "door", driver = "gearshift-door", peripheral = GEARSHIFT_PERIPHERAL,
       distance = GEARSHIFT_DISTANCE, openDirection = GEARSHIFT_OPEN_DIRECTION },
 }
 
-local DOOR_DEVICE = DEVICES[3]
-local GEARSHIFT_DOOR = DEVICES[5]
+local DOOR_DEVICE = DEVICES[4]
+local GEARSHIFT_DOOR = DEVICES[6]
 
 -- ============ HASH ============
 local function loadHash()
@@ -791,12 +795,14 @@ drawGearInsideState()
 gearControl.home()
 
 -- ============ START ============
+bunkerlib.findModem(MODEM_SIDE)
+
 bunkerlib.runClient({
     name      = NAME,
     modemSide = MODEM_SIDE,
     interval  = UPDATE_INTERVAL,
     devices   = DEVICES,
-    onEvent = function(event, p1, p2, p3)
+onEvent = function(event, p1, p2, p3)
         if event == "timer" then
             local action = timers[p1]
             if action then action(); timers[p1] = nil end

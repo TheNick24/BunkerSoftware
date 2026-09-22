@@ -42,6 +42,7 @@ load("monitor")   -- drawHeader, drawInfoPlaceholder, drawFooter,
 load("gfx")       -- 256-color graphics-mode drawing (cc-graphics mod)
 load("energy")    -- induction-matrix telemetry: readInduction, broadcast,
                   --                   drawMonitor (reusable energy screen)
+load("alarmin")   -- redstone alarm input polling: bunkerlib.alarmin.create()
 load("client")    -- runClient
 
 return bunkerlib

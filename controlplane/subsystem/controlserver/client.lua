@@ -100,11 +100,16 @@ lib.printOnce(errs, dev.id, dev.driver.name .. " error (" .. dev.id .. "): " .. 
         f.write(textutils.serialise({ lastSet = lastSet, lastLock = lastLock }))
         f.close()
     end
-    -- Boot/heartbeat audit: appended on request so the operator can confirm
-    -- via `log.read path=main` that this client really boots, opens its modem
-    -- and replays statuses (not just that it did not crash). Defined BEFORE
-    -- sendStatus so the references inside sendStatus bind to this local.
-    local function clientMark(msg)
+    -- Boot/heartbeat audit: BUFFERED on purpose - one disk open/write/close
+    -- per status request is exactly the CPU load that makes CC timers fire
+    -- late (same rationale as controlserver's serverMark). Flushed on each
+    -- heartbeat and when the buffer fills. Defined BEFORE sendStatus so the
+    -- references inside sendStatus bind to this local.
+    local markBuf = {}
+    local function flushMarks()
+        if #markBuf == 0 then return end
+        local lines = table.concat(markBuf, "\n")
+        markBuf = {}
         pcall(function()
             local d = fs.getDir(shell.getRunningProgram())
             if not d or d == "" then d = "/" end
@@ -115,10 +120,14 @@ lib.printOnce(errs, dev.id, dev.driver.name .. " error (" .. dev.id .. "): " .. 
             end
             local f = fs.open(fp, "a")
             if f then
-                f.write("@" .. tostring(os.epoch("utc")) .. ": " .. msg .. "\n")
+                f.write(lines .. "\n")
                 f.close()
             end
         end)
+    end
+    local function clientMark(msg)
+        if #markBuf >= 64 then flushMarks() end
+        markBuf[#markBuf + 1] = "@" .. tostring(os.epoch("utc")) .. ": " .. msg
     end
 
     -- `force` = heartbeat: broadcast EVERY device (keeps the control room's
@@ -126,7 +135,6 @@ lib.printOnce(errs, dev.id, dev.driver.name .. " error (" .. dev.id .. "): " .. 
     -- so quick on/off commands do not re-flood rednet with all devices.
     -- Lockable doors broadcast their lock flag alongside the door state.
     local function sendStatus(force)
-        if clientMark then clientMark("ss force=" .. tostring(force)) end
         for _, dev in ipairs(devices) do
             local state = read(dev)
             local lock
@@ -137,10 +145,7 @@ lib.printOnce(errs, dev.id, dev.driver.name .. " error (" .. dev.id .. "): " .. 
             if force or lastStatus[dev.id] ~= state or lastLockOut[dev.id] ~= lock then
                 local msg = { id = dev.id, cmd = dev.cmd, state = state }
                 if lock ~= nil then msg.lock = lock end
-                local okB, errB = pcall(rednet.broadcast, msg, "bunker_status")
-                if clientMark then
-                    clientMark("out id=" .. tostring(dev.id) .. " ok=" .. tostring(okB) .. (not okB and (" err=" .. tostring(errB)) or ""))
-                end
+                pcall(rednet.broadcast, msg, "bunker_status")
             end
             lastStatus[dev.id] = state
             lastLockOut[dev.id] = lock
@@ -174,6 +179,7 @@ lib.printOnce(errs, dev.id, dev.driver.name .. " error (" .. dev.id .. "): " .. 
     clientMark("boot: modem=" .. tostring(modem) .. " devices=" .. #devices)
     clientMark("boot prog=" .. tostring(shell.getRunningProgram()) .. " dir=" .. tostring(fs.getDir(shell.getRunningProgram())))
     clientMark("modem open left=" .. tostring(rednet.isOpen("left")) .. " back=" .. tostring(rednet.isOpen("back")) .. " top=" .. tostring(rednet.isOpen("top")))
+    flushMarks()
     pcall(rednet.broadcast, { test = true, at = os.epoch("utc") }, "bunker_test")
 
     -- Optional telemetry: periodically read one or more induction matrices and
@@ -183,8 +189,20 @@ lib.printOnce(errs, dev.id, dev.driver.name .. " error (" .. dev.id .. "): " .. 
     -- Each entry: side, protocol (default "bunker_energy"), interval (default
     -- conf.interval or 10).
     local telemTimers = {} -- timerId -> battery name
-    local function telemTimerStart(interval)
-        return os.startTimer(interval or conf.interval or 10)
+    local batteryTimerIds = {} -- battery name -> currently armed timerId
+    -- Exactly one timer per battery: arming cancels any pending timer first.
+    -- Without this, every bunker_status_request spawned a parallel chain and
+    -- the bunker_energy flood starved the event loop (late heartbeats).
+    local function telemTimerArm(name, interval)
+        local prev = batteryTimerIds[name]
+        if prev then
+            pcall(os.cancelTimer, prev)
+            telemTimers[prev] = nil
+        end
+        local timerId = os.startTimer(interval or conf.interval or 10)
+        telemTimers[timerId] = name
+        batteryTimerIds[name] = timerId
+        return timerId
     end
     local function broadcastBattery(name)
         local t = conf.telemetry and conf.telemetry[name]
@@ -205,8 +223,7 @@ lib.printOnce(errs, dev.id, dev.driver.name .. " error (" .. dev.id .. "): " .. 
                 lib.printOnce(errs, "telem." .. name, "telemetry broadcast failed: " .. tostring(resB))
             end
         end
-        local timerId = telemTimerStart(t.interval)
-        telemTimers[timerId] = name
+        telemTimerArm(name, t.interval)
     end
     if conf.telemetry and lib.energy then
         for name in pairs(conf.telemetry) do
@@ -217,25 +234,36 @@ lib.printOnce(errs, dev.id, dev.driver.name .. " error (" .. dev.id .. "): " .. 
     while true do
         local event, p1, p2, p3 = os.pullEvent()
         if event == "timer" and p1 == statusTimer then
-            sendStatus(true)
+            -- Re-arm BEFORE the (potentially slow) send so the next due time
+            -- is measured from now, not from after sendStatus returns.
             statusTimer = os.startTimer(conf.interval)
+            sendStatus(true)
+            clientMark("hb ok")
+            flushMarks()
         elseif event == "timer" then
             local name = telemTimers[p1]
             if name then
                 telemTimers[p1] = nil
+                batteryTimerIds[name] = nil
                 broadcastBattery(name)
+                -- Belt and suspenders: if the dedicated status timer ever
+                -- gets lost (parallel agent/HTTP quirks), telemetry ticks
+                -- still keep the room heartbeats alive.
+                sendStatus(true)
             end
         elseif event == "rednet_message" then
             local senderId, message, protocol = p1, p2, p3
             if protocol == "bunker_status_request" then
                 -- A control-server restart loses its in-memory status table.
                 -- Reply immediately instead of making the monitors wait for
-                -- the next ordinary room heartbeat.
+                -- the next ordinary room heartbeat. broadcastBattery cancels
+                -- and re-arms the existing per-battery timer (no chain leak).
                 sendStatus(true)
                 if conf.telemetry and lib.energy then
                     for name in pairs(conf.telemetry) do broadcastBattery(name) end
                 end
                 clientMark("request from " .. tostring(senderId) .. " -> replayed")
+                flushMarks()
             elseif protocol == "bunker_cmd" and type(message) == "table" and message.cmd then
                 for _, dev in ipairs(devices) do
                     if dev.id == message.room and dev.cmd == message.cmd then

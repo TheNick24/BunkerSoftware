@@ -1,4 +1,5 @@
 "use strict";
+const path = require("node:path");
 const { randomToken } = require("./crypto");
 const { buildRelease, persistRelease } = require("./releaseService");
 const { replyJson } = require("./deviceRoutes");
@@ -40,7 +41,87 @@ function operatorApi(ctx) {
     return cid;
   }
 
+  function rebuildSources() {
+    const toolsPath = path.join(cfg.rootDir, "..", "tools", "build-releases.js");
+    const { build } = require(toolsPath);
+    const ok = build();
+    if (!ok) {
+      const e = new Error("build-releases reported errors (see server log)");
+      e.status = 400;
+      throw e;
+    }
+  }
+
+  function deployOne({ deviceId, role, installation }) {
+    if (!store.devices[deviceId]) {
+      const e = new Error("unknown device");
+      e.status = 404;
+      throw e;
+    }
+    if (!role || !installation) {
+      const e = new Error("role and installation required");
+      e.status = 400;
+      throw e;
+    }
+    const manifest = buildRelease({ rootDir: cfg.rootDir, role, installation });
+    persistRelease({ rootDir: cfg.rootDir, manifest });
+    if (!store.releases[manifest.releaseId]) {
+      store.releases[manifest.releaseId] = {
+        role,
+        installation,
+        created: manifest.created,
+        files: manifest.files,
+      };
+      store.persistReleases();
+    }
+    const cid = enqueue(deviceId, "release.deploy", {
+      releaseId: manifest.releaseId,
+      manifestUrl: `${cfg.agentBaseUrl.replace(/\/$/, "")}/releases/${manifest.releaseId}/manifest.json`,
+      healthTimeoutSeconds: cfg.healthTimeoutSeconds,
+    });
+    return { cid, releaseId: manifest.releaseId, files: manifest.files.length, role, installation };
+  }
+
+  function deployKnown(deviceId) {
+    const target = deviceTarget(deviceId);
+    if (!target || !target.role || !target.installation) {
+      const e = new Error("no role for device - set desired state or deploy once");
+      e.status = 400;
+      throw e;
+    }
+    if (target.role === "none") {
+      const e = new Error("role is none");
+      e.status = 400;
+      throw e;
+    }
+    return deployOne({ deviceId, role: target.role, installation: target.installation });
+  }
+
   // ---- fleet ---------------------------------------------------------------
+  function deviceTarget(id) {
+    const ds = store.loadDesiredState();
+    const want = ds.devices && ds.devices[id];
+    if (want && typeof want.role === "string" && typeof want.installation === "string") {
+      return { role: want.role, installation: want.installation, source: "desired" };
+    }
+    const dev = store.devices[id];
+    if (dev && dev.releases) {
+      let best = null;
+      let bestAt = -1;
+      for (const [rid, st] of Object.entries(dev.releases)) {
+        const m = store.releases[rid];
+        if (!m || !m.role) continue;
+        const at = st.at || 0;
+        if (at >= bestAt) {
+          bestAt = at;
+          best = m;
+        }
+      }
+      if (best) return { role: best.role, installation: best.installation, source: "inferred" };
+    }
+    return null;
+  }
+
   function fleet() {
     return Object.entries(store.devices).map(([id, d]) => ({
       id,
@@ -48,6 +129,7 @@ function operatorApi(ctx) {
       lastSeen: d.lastSeen || null,
       seq: d.seq,
       releases: d.releases || {},
+      target: deviceTarget(id),
     }));
   }
 
@@ -55,14 +137,35 @@ function operatorApi(ctx) {
     const d = store.devices[id];
     if (!d) return null;
     const cmds = Object.values(store.commands[id] || {}).sort((a, b) => a.createdAt - b.createdAt);
+    const raw = Object.entries(d.releases || {});
+    const history = raw
+      .map(([rid, st]) => {
+        const m = store.releases[rid] || {};
+        const files = Array.isArray(m.files) ? m.files : [];
+        return {
+          releaseId: rid,
+          state: (st && st.state) || null,
+          at: (st && st.at) || null,
+          role: m.role || null,
+          installation: m.installation || null,
+          created: m.created || null,
+          fileCount: files.length,
+          files: files.map((f) => ({ path: f.path, hash: f.hash })),
+        };
+      })
+      .sort((a, b) => (b.at || 0) - (a.at || 0));
+    if (history.length) history[0].current = true;
     return {
       id,
       label: d.label || null,
       agentVersion: d.agentVersion || null,
       lastSeen: d.lastSeen || null,
       seq: d.seq,
+      labelSource: d.labelSource || null,
       releases: d.releases || {},
-      recentCommands: cmds.slice(-20),
+      releaseHistory: history,
+      target: deviceTarget(id),
+      recentCommands: cmds.slice(-30),
     };
   }
 
@@ -231,25 +334,93 @@ function operatorApi(ctx) {
         const { deviceId, role, installation } = body;
         if (!store.devices[deviceId]) return replyJson(req, res, 404, { error: "unknown device" });
         try {
-          const manifest = buildRelease({ rootDir: cfg.rootDir, role, installation });
-          persistRelease({ rootDir: cfg.rootDir, manifest });
-          if (!store.releases[manifest.releaseId]) {
-            store.releases[manifest.releaseId] = {
-              role,
-              installation,
-              created: manifest.created,
-              files: manifest.files,
-            };
-            store.persistReleases();
-          }
-          const cid = enqueue(deviceId, "release.deploy", {
-            releaseId: manifest.releaseId,
-            manifestUrl: `${cfg.agentBaseUrl.replace(/\/$/, "")}/releases/${manifest.releaseId}/manifest.json`,
-            healthTimeoutSeconds: cfg.healthTimeoutSeconds,
-          });
-          replyJson(req, res, 200, { cid, releaseId: manifest.releaseId, files: manifest.files.length });
+          replyJson(req, res, 200, deployOne({ deviceId, role, installation }));
         } catch (e) {
-          replyJson(req, res, 400, { error: e.message });
+          replyJson(req, res, e.status || 400, { error: e.message });
+        }
+      },
+    },
+
+    // POST /api/update            body: {deviceId?}  fleet-wide when deviceId omitted
+    // POST /api/devices/:id/update body: {}
+    // Rebuilds subsystem bundles from current sources, then deploys.
+    update: {
+      auth: true,
+      run: async (req, res) => {
+        const body = req.body || {};
+        const onlyId = body.deviceId != null && body.deviceId !== "" ? String(body.deviceId) : null;
+        if (onlyId && !store.devices[onlyId]) {
+          return replyJson(req, res, 404, { error: "unknown device" });
+        }
+        try {
+          rebuildSources();
+        } catch (e) {
+          return replyJson(req, res, 400, { error: "source rebuild failed: " + e.message });
+        }
+        const ids = onlyId ? [onlyId] : Object.keys(store.devices);
+        const results = [];
+        const built = new Map(); // "role/installation" -> manifest
+        for (const id of ids) {
+          const target = deviceTarget(id);
+          if (!target || !target.role || !target.installation) {
+            results.push({ deviceId: id, error: "no role for device - set desired state or deploy once" });
+            continue;
+          }
+          if (target.role === "none") {
+            results.push({ deviceId: id, error: "role is none" });
+            continue;
+          }
+          try {
+            const key = target.role + "/" + target.installation;
+            let manifest = built.get(key);
+            if (!manifest) {
+              manifest = buildRelease({ rootDir: cfg.rootDir, role: target.role, installation: target.installation });
+              persistRelease({ rootDir: cfg.rootDir, manifest });
+              if (!store.releases[manifest.releaseId]) {
+                store.releases[manifest.releaseId] = {
+                  role: target.role,
+                  installation: target.installation,
+                  created: manifest.created,
+                  files: manifest.files,
+                };
+                store.persistReleases();
+              }
+              built.set(key, manifest);
+            }
+            const cid = enqueue(id, "release.deploy", {
+              releaseId: manifest.releaseId,
+              manifestUrl: `${cfg.agentBaseUrl.replace(/\/$/, "")}/releases/${manifest.releaseId}/manifest.json`,
+              healthTimeoutSeconds: cfg.healthTimeoutSeconds,
+            });
+            results.push({
+              deviceId: id,
+              cid,
+              releaseId: manifest.releaseId,
+              role: target.role,
+              installation: target.installation,
+              files: manifest.files.length,
+            });
+          } catch (e) {
+            results.push({ deviceId: id, role: target.role, installation: target.installation, error: e.message });
+          }
+        }
+        replyJson(req, res, 200, { rebuilt: true, results });
+      },
+    },
+    "devices/:id/update": {
+      auth: true,
+      run: async (req, res, m) => {
+        if (req.method !== "POST") return replyJson(req, res, 405, { error: "POST required" });
+        if (!store.devices[m.params.id]) return replyJson(req, res, 404, { error: "no such device" });
+        try {
+          rebuildSources();
+        } catch (e) {
+          return replyJson(req, res, 400, { error: "source rebuild failed: " + e.message });
+        }
+        try {
+          replyJson(req, res, 200, { rebuilt: true, ...deployKnown(m.params.id) });
+        } catch (e) {
+          replyJson(req, res, e.status || 400, { error: e.message });
         }
       },
     },
