@@ -100,11 +100,33 @@ lib.printOnce(errs, dev.id, dev.driver.name .. " error (" .. dev.id .. "): " .. 
         f.write(textutils.serialise({ lastSet = lastSet, lastLock = lastLock }))
         f.close()
     end
+    -- Boot/heartbeat audit: appended on request so the operator can confirm
+    -- via `log.read path=main` that this client really boots, opens its modem
+    -- and replays statuses (not just that it did not crash). Defined BEFORE
+    -- sendStatus so the references inside sendStatus bind to this local.
+    local function clientMark(msg)
+        pcall(function()
+            local d = fs.getDir(shell.getRunningProgram())
+            if not d or d == "" then d = "/" end
+            local fp = fs.combine(d, "client-error.log")
+            if fs.exists(fp) then
+                local sz = fs.getSize(fp)
+                if sz and sz > 16384 then fs.delete(fp) end
+            end
+            local f = fs.open(fp, "a")
+            if f then
+                f.write("@" .. tostring(os.epoch("utc")) .. ": " .. msg .. "\n")
+                f.close()
+            end
+        end)
+    end
+
     -- `force` = heartbeat: broadcast EVERY device (keeps the control room's
     -- online detection working). Without force: only broadcast what CHANGED,
     -- so quick on/off commands do not re-flood rednet with all devices.
     -- Lockable doors broadcast their lock flag alongside the door state.
     local function sendStatus(force)
+        if clientMark then clientMark("ss force=" .. tostring(force)) end
         for _, dev in ipairs(devices) do
             local state = read(dev)
             local lock
@@ -125,6 +147,7 @@ lib.printOnce(errs, dev.id, dev.driver.name .. " error (" .. dev.id .. "): " .. 
         end
     end
 
+    -- Boot/heartbeat audit comment retained; definition moved above.
     local function clientLoop()
     term.clear()
     term.setCursorPos(1, 1)
@@ -148,26 +171,10 @@ lib.printOnce(errs, dev.id, dev.driver.name .. " error (" .. dev.id .. "): " .. 
     sendStatus(true)
     local statusTimer = os.startTimer(conf.interval)
 
-    -- Boot/heartbeat audit: appended on request so the operator can confirm
-    -- via `log.read path=main` that this client really boots, opens its modem
-    -- and replays statuses (not just that it did not crash).
-    local function clientMark(msg)
-        pcall(function()
-            local d = fs.getDir(shell.getRunningProgram())
-            if not d or d == "" then d = "/" end
-            local fp = fs.combine(d, "client-error.log")
-            if fs.exists(fp) then
-                local sz = fs.getSize(fp)
-                if sz and sz > 16384 then fs.delete(fp) end
-            end
-            local f = fs.open(fp, "a")
-            if f then
-                f.write("@" .. tostring(os.epoch("utc")) .. ": " .. msg .. "\n")
-                f.close()
-            end
-        end)
-    end
     clientMark("boot: modem=" .. tostring(modem) .. " devices=" .. #devices)
+    clientMark("boot prog=" .. tostring(shell.getRunningProgram()) .. " dir=" .. tostring(fs.getDir(shell.getRunningProgram())))
+    clientMark("modem open left=" .. tostring(rednet.isOpen("left")) .. " back=" .. tostring(rednet.isOpen("back")) .. " top=" .. tostring(rednet.isOpen("top")))
+    pcall(rednet.broadcast, { test = true, at = os.epoch("utc") }, "bunker_test")
 
     -- Optional telemetry: periodically read one or more induction matrices and
     -- broadcast the values under "bunker_energy" so any room can display the
