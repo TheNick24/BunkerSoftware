@@ -35,7 +35,12 @@ local SHARED = {
     { src = "lib/actions.lua",      dest = "actions.lua" },
     { src = "lib/doors.lua",        dest = "doors.lua" },
     { src = "lib/monitor.lua",      dest = "monitor.lua" },
+    { src = "lib/gearshift.lua",    dest = "gearshift.lua" },
+    { src = "lib/gfx.lua",          dest = "gfx.lua" },
+    { src = "lib/energy.lua",       dest = "energy.lua" },
     { src = "lib/client.lua",       dest = "client.lua" },
+    { src = "lib/alarmin.lua",      dest = "alarmin.lua" },
+    { src = "lib/alarmconfig.lua",  dest = "alarmconfig.lua" },
     { src = "deploy/receiver.lua",  dest = "receiver.lua" },
 }
 
@@ -43,8 +48,10 @@ local SHARED = {
 -- true` additionally writes a startup.lua that starts the receiver together
 -- with the main program, so the target can be updated again after a reboot.
 local ROLES = {
-    -- ControlServer (monitor panels + alarm UI, the screens)
+    -- ControlServer (console + alarm + status; NO monitors)
     controlserver = { src = "controlserver/startup.lua",            dest = "main.lua", launcher = true },
+    -- ScreenServer (monitor panels + touch + alarm banner; multi-instance)
+    screenserver  = { src = "screenserver/startup.lua",           dest = "main.lua", launcher = true },
     entrance    = { src = "client/entrance/startup.lua",    dest = "main.lua", launcher = true },
     meroom      = { src = "client/meroom/startup.lua", dest = "main.lua", launcher = true },
     maschineroom = { src = "client/energyroom/startup.lua", dest = "main.lua", launcher = true },
@@ -61,7 +68,7 @@ local ROLES = {
 -- IDs on the screens of the running receivers, with `id`, or via
 -- `remote list` (the CLIENT column shows the numeric computer id).
 local TARGETS = {
-    [10] = "controlserver",    -- ControlServer: the monitor panels + alarm UI
+    [10] = "controlserver",    -- ControlServer: console + alarm (monitors are handled by a screenserver instance)
     [12] = "control",        -- Control: separate door-keypad computer (door + its monitors)
     [28] = "entrance",       -- Entrance room client
     [27] = "meroom",      -- ME-Core room client

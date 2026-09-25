@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bunker Controlplane</title>
-<link rel="stylesheet" href="/assets/app.css?v=2">
+<link rel="icon" href="/assets/favicon.png" type="image/png">
+<link rel="stylesheet" href="/assets/app.css?v=7">
 </head>
 <body>
 
@@ -22,13 +23,14 @@
   <label class="muted" style="margin:0">token</label>
   <input type="password" id="tokenInput" placeholder="x-operator-token" autocomplete="off">
   <span class="spacer"></span>
+  <button class="primary" id="updateFleetBtn" title="Rebuild sources and deploy to all devices">Update fleet</button>
   <label class="muted" style="margin:0" id="serverStatus">offline</label>
 </header>
 
 <nav>
   <button data-panel="fleet" class="active">Fleet</button>
   <button data-panel="pairing">Pairing</button>
-  <button data-panel="releases">Releases</button>
+  <button data-panel="deploy">Deploy</button>
   <button data-panel="config">Desired state</button>
 </nav>
 
@@ -53,7 +55,7 @@
     </div>
   </section>
 
-  <section id="panel-releases">
+  <section id="panel-deploy">
     <h2>Deploy a release</h2>
     <div class="card boxed">
       <div class="form-grid">
@@ -73,14 +75,44 @@
       <div class="row">
         <button class="primary" id="deployBtn">Build &amp; deploy</button>
       </div>
+      <p class="muted">Release history lives on each server's detail page (Fleet → details).</p>
     </div>
-    <h2>Releases</h2>
+  </section>
+
+  <section id="panel-device">
+    <div class="row" style="margin-top:0">
+      <button id="deviceBack">&larr; Fleet</button>
+    </div>
+    <div id="deviceHead" class="device-head"></div>
+    <div id="deviceInfo" class="info-grid"></div>
+    <div class="row" id="deviceActions"></div>
+
+    <h2>Release history</h2>
     <div class="card">
       <table>
-        <thead><tr><th>Release</th><th>Role</th><th>Installation</th><th>Created</th><th>Files</th><th>Targets</th></tr></thead>
-        <tbody id="releaseRows"></tbody>
+        <thead>
+          <tr>
+            <th>Release</th>
+            <th>Role</th>
+            <th>Installation</th>
+            <th>State</th>
+            <th>Deployed</th>
+            <th>Built</th>
+            <th>Files</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="deviceReleaseRows"></tbody>
       </table>
-      <div class="muted" id="releaseEmpty">No releases yet.</div>
+      <div class="muted" id="deviceReleaseEmpty">No releases deployed to this server yet.</div>
+      <div id="deviceReleasePager" class="pager"></div>
+      <div id="deviceReleaseFiles" class="hidden"></div>
+    </div>
+
+    <h2>Recent commands</h2>
+    <div class="card">
+      <div id="deviceCommands"><div class="muted">Loading…</div></div>
+      <div id="deviceCmdPager" class="pager"></div>
     </div>
   </section>
 
@@ -111,6 +143,6 @@
 
 <div id="toasts"></div>
 
-<script src="/assets/app.js?v=2"></script>
+<script src="/assets/app.js?v=7"></script>
 </body>
 </html>

@@ -32,10 +32,23 @@ local DEVICES = {
     { id = "me-corridor-2", cmd = "light", driver = "relay", relay = "redstone_relay_14", side = "right" }
 }
 
+-- Induction-matrix telemetry: read these peripherals and broadcast the values
+-- so the control room (and any future local screen) can display energy.
+-- Map = battery name -> { side, protocol, interval }. Add more batteries here
+-- (e.g. "Battery - 2") as further induction cells come online.
+local ENERGY_TELEMETRY = {
+    ["Battery - 1"] = {
+        side = "inductionPort_0",
+        protocol = "bunker_energy",
+        interval = 5,
+    },
+}
+
 -- ============ START ============
 bunkerlib.runClient({
     name      = NAME,
     modemSide = MODEM_SIDE,
     interval  = UPDATE_INTERVAL,
     devices   = DEVICES,
+    telemetry = ENERGY_TELEMETRY,
 })

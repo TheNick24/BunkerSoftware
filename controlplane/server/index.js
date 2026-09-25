@@ -140,8 +140,11 @@ function matchRoute(method, p) {
   const opMatch = p.match(/^\/api\/(fleet|pairing|config|releases|deploy)$/);
   if (method === "GET" && opMatch) return { kind: "operator", arg: opMatch[1] };
   if ((method === "POST" || method === "PUT") && opMatch) return { kind: "operator", arg: opMatch[1] };
+  if (method === "POST" && p === "/api/update") return { kind: "operator", arg: "update" };
+  const opDev = p.match(/^\/api\/devices\/([0-9]+)\/?$/);
+  if (method === "GET" && opDev) return { kind: "operator", arg: "devices/:id", params: { id: opDev[1] } };
   const opId = p.match(/^\/api\/devices\/([0-9]+)\/([a-z-]+)(?:\/([a-z-]+))?$/);
-  if (opId && ["command", "commands", "reboot", "agent-update", "rollback", "rename", "delete", "change-id"].includes(opId[2])) {
+  if (opId && ["command", "commands", "reboot", "agent-update", "rollback", "rename", "delete", "change-id", "update"].includes(opId[2])) {
     return { kind: "operator", arg: `devices/:id/${opId[2]}`, params: { id: opId[1] } };
   }
   const opCmd = p.match(/^\/api\/commands\/([0-9a-f]+)$/i);

@@ -38,6 +38,13 @@ local C = {
     purple  = 14,
     pink    = 15,
     blue    = 16,
+
+    -- muted/desaturated variants used by calmer HUD widgets (e.g. the energy
+    -- cards) where the vivid alarm colors above would read as too intense.
+    gold    = 17,  -- muted warm gold (ok / neutral state)
+    amber   = 18,  -- muted amber (low / warning)
+    crimson = 19,  -- muted brick red (critical)
+    sage    = 20,  -- muted sage green (charging / good)
 }
 
 -- RGB per palette slot (0-255 each). Slot 0 is set to bg in init() so the
@@ -59,6 +66,11 @@ local PALETTE = {
     [14] = { 180, 132, 255 }, -- purple
     [15] = { 255, 112, 200 }, -- pink
     [16] = { 78, 126, 255 },  -- blue
+
+    [17] = { 214, 178, 110 }, -- gold (muted)
+    [18] = { 198, 140, 84 },  -- amber (muted)
+    [19] = { 178, 92, 92 },   -- crimson (muted)
+    [20] = { 150, 189, 140 }, -- sage (muted)
 }
 
 -- 5x7 bitmap font (ASCII 0x20-0x7E). Each glyph is 7 rows of 5 chars,
@@ -833,6 +845,7 @@ local function drawText(mon, px0, py0, s, fg, bg)
         glyph(mon, px0 + (i - 1) * CELL_W, py0, s:sub(i, i), fg, bg)
     end
 end
+
 
 -- text at a cell position (1-based)
 local function cellText(mon, cx, cy, s, fg, bg)

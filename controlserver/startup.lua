@@ -1,5 +1,11 @@
 -- ============================================
 -- MAMDANI OS - CONTROL SERVER
+-- Command console + alarm + status cache. NO monitors - the monitor
+-- panels live on the screen server(s) (screenserver/startup.lua).
+-- Multiple control server instances may run in parallel (backup
+-- consoles): all stay in sync via bunker_status (device states) and
+-- bunker_alarm (alarm on/off).
+--
 -- Setup: setup            (set password)
 -- Start: start            (auto-run on normal boot)
 -- ============================================
@@ -18,11 +24,18 @@ package.path = fs.combine(dir, "?.lua") .. ";" .. package.path
 local bunkerlib = require("bunkerlib")
 
 -- ============ CONFIG ============
+local INSTANCE = "controlserver#" .. os.getComputerID()
 local HASH_FILE = "bunker.hash"
 local UPDATE_INTERVAL = 20
+-- Periodically re-ask all clients for their full state, so a room that was
+-- rebooting (update wave) or that missed a heartbeat comes back online
+-- within at most this many seconds instead of showing OFFLINE.
+-- Must stay well below the 25s cleanStatuses expiry (see below) or rooms
+-- flap OFFLINE between resyncs when their regular heartbeats are delayed.
+local STATUS_RESYNC_INTERVAL = 15
 
--- The room itself always runs (lights, monitors, status) - only the command
--- console needs the password. It starts LOCKED and re-locks after inactivity.
+-- The room itself always runs (lights, status) - only the command console
+-- needs the password. It starts LOCKED and re-locks after inactivity.
 local LOCK_AFTER_IDLE = 300   -- seconds of idle until the console locks again
 local MAX_FAILED      = 5     -- failed unlock attempts until a lockout
 local LOCKOUT_SECONDS = 60    -- lockout after too many failed attempts
@@ -30,52 +43,9 @@ local AUDIT_LOG       = "bunker.audit.log"
 local HISTORY_FILE    = "bunker.history"
 local MAX_HISTORY     = 20
 
--- Device groups. Rooms are regular rooms, special groups are NOT part of
--- a room (corridor lamps, doors, ...). Each entry needs a unique `id`.
-local rooms = {
-    { id = "entrance", name = "Entrance" },
-    { id = "me",       name = "ME-Core" },
-    { id = "control",  name = "Control-Room" },
-    { id = "maschine-room", name = "Maschine Room" },
-}
-
-local aux = {
-    { id = "me-corridor-1", name = "ME Corridor 1" },
-    { id = "me-corridor-2", name = "ME Corridor 2" },
-    { id = "maschine-corridor-1", name = "Maschine Corridor 1" },
-    { id = "control-corridor-1",  name = "CR Corridor 1"}
-}
-
--- Doors. Same pattern as the light groups.
-local doors = {
-    { id = "control-door", name = "Control Door" },
-    { id = "server-door", name = "Server Access Door"}
-}
-
--- Safety doors: ALARM doors that normally stand OPEN and only close in an
--- emergency. Close them all at once with the `alarm` command (red banner).
-local safetyDoors = {
-    { id = "me-safety-1",          name = "ME Safety Door" },
-    { id = "distributor-safety-1", name = "Distributor Safety Door" },
-}
-
--- Monitor panels: assign each monitor a device group (or `sections` to show
--- several groups on one monitor). `action` selects the device behavior
--- ("light" = on/off toggle, "door"/"safety-door" = open/close) and must
--- match the client device's `cmd`. New device types just need a list above
--- (with unique ids) + one row here.
-local MONITOR_PANELS = {
-    ["monitor_4"] = { title = "ROOM LIGHTS",     action = "light", header = "LIGHT", entries = rooms },
-    ["monitor_7"] = { title = "CORRIDOR LIGHTS", action = "light", header = "LIGHT", entries = aux },
-    ["monitor_3"] = { title = "DOORS", sections = {
-        { title = "DOOR",         action = "door",        onText = "OPEN", offText = "CLOSED", entries = doors },
-        { title = "SAFETY DOORS", action = "safety-door", onText = "OPEN", offText = "CLOSED", entries = safetyDoors },
-    } },
-}
-
--- Dedicated monitor that ONLY shows a big tappable ALARM button
--- (tap = start/stop the emergency, same as the `alarm` console command).
-local ALARM_BUTTON_MONITOR = "monitor_14"
+-- Shared static device lists (same source as every screen server).
+local alarmSirens   = bunkerlib.alarmSirens
+local lockableDoors = bunkerlib.lockableDoors
 
 -- ============ HASH ============
 local function loadHash()
@@ -167,7 +137,7 @@ local function runSetup()
     end
 end
 
--- ============ CONTROL ROOM ============
+-- ============ CONTROL SERVER ============
 local function runControl()
     local expected = loadHash()
     if not expected then
@@ -197,6 +167,7 @@ local function runControl()
     term.setTextColor(colors.cyan)
     print("=== MAMDANI OS ===")
     term.setTextColor(colors.gray)
+    print("Control Server: " .. INSTANCE)
     print("Console locked - type `unlock` then the password.")
     term.setTextColor(colors.white)
 
@@ -207,14 +178,6 @@ local function runControl()
         return
     end
 
-    local monitors = {}
-    for _, name in ipairs(peripheral.getNames()) do
-        if peripheral.getType(name) == "monitor" then
-            table.insert(monitors, { name = name, mon = peripheral.wrap(name) })
-        end
-    end
-
-    local buttons = {} -- buttons[monitorName][y] = { id, action }
     local statuses = {}
     local alarm = false -- true = emergency: all safety doors CLOSED
 
@@ -276,280 +239,40 @@ local function runControl()
     term.setTextColor(colors.gray)
     print("Console locked - type `unlock` to enable commands.")
 
-    local function countEntries(panel)
-        if panel.sections then
-            local n = 0
-            for _, s in ipairs(panel.sections) do n = n + #s.entries end
-            return n
-        end
-        return #panel.entries
-    end
-
-    -- ---- gfx (cc-graphics 256-color) rendering ----
-    local g = bunkerlib.gfx
-    local C = g.C
-    local gfxCaps = {}
-    local function monGfx(mon)
-        local key = mon.name
-        if gfxCaps[key] == nil then
-            local ok = g.supported(mon.mon)
-            if ok then ok = g.init(mon.mon) end
-            if not ok and mon.mon.setGraphicsMode then
-                pcall(function() mon.mon.setGraphicsMode(0) end)
-            end
-            gfxCaps[key] = ok
-        end
-        return gfxCaps[key]
-    end
-
-    local function gfxHeader(mon)
-        g.centerText(mon.mon, 1, "MAMDANI OS", C.cyan, C.bg)
-        g.hline(mon.mon, 2 * g.CELL_H - 1, C.borderD)
-    end
-
-    local function gfxFooter(mon, label, extra)
-        local w, h = mon.mon.getSize()
-        local fy = h - 1
-        g.hline(mon.mon, fy * g.CELL_H - 1, C.borderD)
-        g.cellText(mon.mon, 2, h, label, C.dim, C.bg)
-        if extra then
-            g.cellText(mon.mon, w - #extra + 1, h, extra, C.cyan, C.bg)
-        end
-    end
-
-    local function gfxAlarmBar(mon)
-        local h = mon.mon.getSize()
-        g.bar(mon.mon, h, C.red)
-        g.centerText(mon.mon, h, "!! ALARM !!", C.white, C.red)
-    end
-
-    -- one toggle table (same cell layout as drawToggleTable so touch rows match)
-    local function gfxToggleTable(mon, src, startRow, btns)
-        local w = mon.mon.getSize()
-        local action = src.action or "light"
-        local label = src.button or "[CLICK]"
-        local btnW = #label
-        local btnX = w - btnW + 1
-        local header = src.header or "STATE"
-        local onText = src.onText or "ON"
-        local offText = src.offText or "OFF"
-        local stateW = math.max(#header, #onText, #offText, #"OFFLINE")
-        local zoneRight = btnX - 1
-        local zoneLeft = zoneRight - stateW + 1
-        local maxName = math.max(3, zoneLeft - 2)
-
-        g.cellText(mon.mon, 2, startRow, "NAME", C.yellow, C.bg)
-        local hx = zoneLeft + math.floor((stateW - #header) / 2)
-        g.cellText(mon.mon, hx, startRow, header, C.yellow, C.bg)
-        g.hline(mon.mon, startRow * g.CELL_H - 1, C.borderD)
-
-        local clientCount = 0
-        for i, entry in ipairs(src.entries) do
-            local y = startRow + 1 + i
-            local status = statuses[entry.id]
-            local online = status ~= nil
-            local rowBg = (i % 2 == 1) and C.panel or C.panel2
-            g.cellFill(mon.mon, 1, y, w, 1, rowBg)
-            local name = entry.name
-            if #name > maxName then name = string.sub(name, 1, maxName) end
-            g.cellText(mon.mon, 2, y, name, C.text, rowBg)
-            if online then
-                clientCount = clientCount + 1
-                local txt = status.state and onText or offText
-                local sx = zoneLeft + math.floor((stateW - #txt) / 2)
-                local sc = status.state and C.yellow or C.dim
-                g.cellText(mon.mon, sx, y, txt, sc, rowBg)
-            else
-                g.cellText(mon.mon, zoneLeft, y, "OFFLINE", C.red, rowBg)
-            end
-            local bc = (online and status.state) and C.green or C.dim
-            g.cellFill(mon.mon, btnX, y, btnW, 1, bc)
-            g.cellText(mon.mon, btnX, y, label, C.bg, bc)
-            g.hline(mon.mon, y * g.CELL_H - 1, C.borderD)
-            btns[y] = { id = entry.id, action = action }
-        end
-        return clientCount
-    end
-
-    local function gfxPanel(mon, panel)
-        g.begin(mon.mon)
-        gfxHeader(mon)
-        local btns = {}
-        buttons[mon.name] = btns
-        local total = countEntries(panel)
-        local n
-        if panel.sections then
-            n = 0
-            local y = 4
-            for _, sec in ipairs(panel.sections) do
-                g.cellText(mon.mon, 2, y, sec.title or panel.title or "GROUP", C.cyan, C.bg)
-                n = n + gfxToggleTable(mon, sec, y + 1, btns)
-                y = y + 4 + #sec.entries
-            end
-        else
-            n = gfxToggleTable(mon, panel, 4, btns)
-        end
-        gfxFooter(mon, panel.title, "CLIENTS: " .. n .. "/" .. total)
-        if alarm then gfxAlarmBar(mon) end
-        g.finish(mon.mon)
-    end
-
-    local function gfxInfo(mon)
-        local w, h = mon.mon.getSize()
-        g.begin(mon.mon)
-        gfxHeader(mon)
-        local bx1, by1 = 2, 3
-        local bx2, by2 = w - 1, math.max(by1, math.min(h - 2, 8))
-        local bw = bx2 - bx1 + 1
-        local bh = by2 - by1 + 1
-        if bh > 2 then
-            g.cellFill(mon.mon, bx1 + 1, by1 + 1, bw - 2, bh - 2, C.panel)
-        end
-        if bh > 0 then
-            g.cellFill(mon.mon, bx1, by1, bw, 1, C.borderD)
-            g.cellFill(mon.mon, bx1, by2, bw, 1, C.borderD)
-            if bh > 2 then
-                g.cellFill(mon.mon, bx1, by1 + 1, 1, bh - 2, C.borderD)
-                g.cellFill(mon.mon, bx2, by1 + 1, 1, bh - 2, C.borderD)
-            end
-        end
-        local lines = {
-            { "INFO PANEL", C.yellow },
-            { "No content assigned yet.", C.dim },
-            { "Config: MONITOR_PANELS", C.dim },
-        }
-        for li, line in ipairs(lines) do
-            local ry = by1 + li
-            if ry <= by2 then
-                g.cellText(mon.mon, bx1 + 1, ry, line[1], line[2], C.panel)
-            end
-        end
-        gfxFooter(mon, "INFO DISPLAY")
-        g.finish(mon.mon)
-    end
-
-    local function gfxAlarmButton(mon)
-        local h = mon.mon.getSize()
-        local pw, ph = g.pxSize(mon.mon)
-        g.begin(mon.mon)
-        local bg = alarm and C.red or C.orange
-        g.fill(mon.mon, 0, 0, pw, ph, bg)
-        if alarm then g.centerText(mon.mon, 2, "STOP", C.white, bg) end
-        g.centerText(mon.mon, 3, "ALARM", alarm and C.white or C.bg, bg)
-        local bts = {}
-        buttons[mon.name] = bts
-        for i = 1, h do bts[i] = { id = "__ALARM__" } end
-        g.finish(mon.mon)
-    end
-
-    local function drawMonitors()
-        buttons = {}
-        for _, mon in ipairs(monitors) do
-            local panel = MONITOR_PANELS[mon.name]
-            if monGfx(mon) then
-                if mon.name == ALARM_BUTTON_MONITOR then
-                    gfxAlarmButton(mon)
-                elseif panel and countEntries(panel) > 0 then
-                    gfxPanel(mon, panel)
-                else
-                    gfxInfo(mon)
-                end
-            elseif mon.name == ALARM_BUTTON_MONITOR then
-                -- dedicated monitor: big tappable ALARM button
-                local w, h = mon.mon.getSize()
-                mon.mon.setBackgroundColor(colors.black)
-                mon.mon.setCursorPos(1, 1)
-                mon.mon.clear()
-                local bw = math.max(3, w - 2)
-                local bh = math.max(2, h - 2)
-                local bx = math.max(1, math.floor((w - bw) / 2) + 1)
-                local by = math.max(1, math.floor((h - bh) / 2) + 1)
-                local bg = alarm and colors.red or colors.orange
-                for i = 0, bh - 1 do
-                    mon.mon.setCursorPos(bx, by + i)
-                    mon.mon.setBackgroundColor(bg)
-                    mon.mon.write(string.rep(" ", bw))
-                end
-                local label = alarm and "STOP ALARM" or "ALARM"
-                if #label > bw then label = string.sub(label, 1, bw) end
-                mon.mon.setCursorPos(bx + math.max(0, math.floor((bw - #label) / 2)), by + math.floor(bh / 2))
-                mon.mon.setTextColor(colors.white)
-                mon.mon.write(label)
-                mon.mon.setBackgroundColor(colors.black)
-                local bts = {}
-                buttons[mon.name] = bts
-                for i = by, by + bh - 1 do bts[i] = { id = "__ALARM__" } end
-            else
-                bunkerlib.drawHeader(mon.mon)
-                local n, lastRow
-                if panel and countEntries(panel) > 0 then
-                    local btns = {}
-                    buttons[mon.name] = btns
-                    local total = countEntries(panel)
-                    n, lastRow = bunkerlib.drawPanel(mon.mon, panel, statuses, btns, true)
-                    bunkerlib.drawFooter(mon.mon, lastRow - 5, panel.title, "CLIENTS: " .. n .. "/" .. total)
-                else
-                    n, lastRow = 0, 3
-                    bunkerlib.drawInfoPlaceholder(mon.mon)
-                    bunkerlib.drawFooter(mon.mon, 3, "INFO DISPLAY")
-                end
-                if alarm then
-                    -- red alarm banner across the footer line of every monitor
-                    local w, h = mon.mon.getSize()
-                    local rows = panel and countEntries(panel) > 0 and (lastRow - 5) or 3
-                    local y = math.max(h - 1, 5 + rows + 2)
-                    mon.mon.setBackgroundColor(colors.red)
-                    mon.mon.setTextColor(colors.white)
-                    mon.mon.setCursorPos(1, y)
-                    mon.mon.clearLine()
-                    mon.mon.setCursorPos(1, y)
-                    mon.mon.write("!! ALARM !!")
-                    mon.mon.setBackgroundColor(colors.black)
-                end
+    -- ---- alarm control (console `alarm on|off`; mirrors of the screen
+    -- server's touch buttons - both instances may trigger, bunker_alarm
+    -- keeps every instance in sync without loops) ----
+    local preAlarm = {}
+    -- Power every alarm siren in the group (Mekanism Industrial Alarm, ...).
+    local function setAlarmSirens(on)
+        for _, s in ipairs(alarmSirens) do
+            local st = statuses[s.id]
+            if st and st.senderId then
+                rednet.send(st.senderId, { room = s.id, cmd = "alarm", state = on }, "bunker_cmd")
             end
         end
     end
-
-    local function statusKey()
-        local parts = {}
-        for id, s in pairs(statuses) do
-            parts[#parts + 1] = id .. "=" .. tostring(s.state) .. "@" .. tostring(s.senderId)
-        end
-        table.sort(parts)
-        return table.concat(parts, "|") .. "|alarm=" .. tostring(alarm)
-    end
-
-    local lastKey = ""
-    local function drawMonitorsIfChanged(force)
-        if force then
-            drawMonitors()
-            lastKey = statusKey()
-            return
-        end
-        local k = statusKey()
-        if k ~= lastKey then
-            lastKey = k
-            drawMonitors()
-        end
-    end
-
-    drawMonitorsIfChanged(true)
-
-    -- ---- alarm control (shared by alarm button + console) ----
-    local function setAlarm(on)
+    -- Apply an alarm state WITHOUT re-broadcasting (receive path).
+    local function applyAlarm(on, origin)
         alarm = on
-        audit("alarm " .. (on and "ON" or "OFF"))
-        local n = bunkerlib.emergencyDoors(statuses, on)
-        drawMonitorsIfChanged(true)
+        audit("alarm " .. (on and "ON" or "OFF") .. (origin and (" via " .. origin) or ""))
+        setAlarmSirens(on)
+        local n = bunkerlib.emergencyDoors(statuses, on, preAlarm, lockableDoors)
         if on then
-            outWrite("ALARM - " .. n .. " safety door(s) CLOSED.", colors.red)
+            outWrite("ALARM" .. (origin and (" [" .. origin .. "]") or "") .. " - " .. n .. " safety door(s) CLOSED.", colors.red)
         else
-            outWrite("Alarm OFF - " .. n .. " safety door(s) reopened.", colors.green)
+            outWrite("Alarm OFF" .. (origin and (" [" .. origin .. "]") or "") .. " - " .. n .. " safety door(s) reopened.", colors.green)
         end
+    end
+    -- Local trigger (console): apply + tell every other server instance.
+    local function setAlarm(on)
+        if alarm == on then return end
+        applyAlarm(on, INSTANCE)
+        rednet.broadcast({ on = on, source = INSTANCE }, "bunker_alarm")
     end
 
     -- ---- command console (type device commands directly) ----
-    -- Starts LOCKED: the room runs (monitors stay alive) but only `unlock`
+    -- Starts LOCKED: the room runs (status stays alive) but only `unlock`
     -- plus the correct password enables commands. Auto-locks again after
     -- LOCK_AFTER_IDLE seconds. Brute force protection: MAX_FAILED wrong
     -- attempts -> LOCKOUT_SECONDS pause. Everything is written to the
@@ -758,61 +481,80 @@ local function runControl()
 
     -- initial console screen (header comes from the buffer, not prints)
     outWrite("=== MAMDANI OS ===", colors.cyan)
+    outWrite("Control Server: " .. INSTANCE, colors.gray)
     outWrite("Console locked - type `unlock` to enable commands.", colors.gray)
     renderOut()
     drawPrompt()
+    -- Diagnostic log, written beside this program, read back via
+    -- `log.read path=main`. BUFFERED on purpose: rednet traffic previously
+    -- caused one disk open/write/close per message - exactly the CPU load
+    -- that makes CC computers tick slower (timers fire late -> rooms drop
+    -- OFFLINE). Lines are flushed together on each status tick instead.
+    local markBuf = {}
+    local function flushMarks()
+        if #markBuf == 0 then return end
+        local lines = table.concat(markBuf, "\n")
+        markBuf = {}
+        pcall(function()
+            local d = fs.getDir(shell.getRunningProgram())
+            if not d or d == "" then d = "/" end
+            local fp = fs.combine(d, "client-error.log")
+            if fs.exists(fp) then
+                local sz = fs.getSize(fp)
+                if sz and sz > 16384 then fs.delete(fp) end
+            end
+            local f = fs.open(fp, "a")
+            if f then
+                f.write(lines .. "\n")
+                f.close()
+            end
+        end)
+    end
+    local function serverMark(msg)
+        if #markBuf >= 64 then flushMarks() end
+        markBuf[#markBuf + 1] = "@" .. tostring(os.epoch("utc")) .. ": " .. msg
+    end
+    -- Ask all running clients for an immediate full state after this server
+    -- restarts. Clients still send their normal heartbeats afterwards.
+    rednet.broadcast({ request = "status" }, "bunker_status_request")
+    serverMark("boot request sent")
     local updateTimer = os.startTimer(UPDATE_INTERVAL)
+    -- Also re-ask periodically: a room that was itself rebooting (e.g. after
+    -- an update wave) or that missed a heartbeat resumes instantly instead of
+    -- sitting on OFFLINE until its next regular broadcast.
+    local syncTimer = os.startTimer(STATUS_RESYNC_INTERVAL)
     local tick = 0
 
     while running do
         local event, p1, p2, p3 = os.pullEvent()
 
         if event == "timer" and p1 == updateTimer then
-            -- redraw only when something changed; repaint fully on every
-            -- second tick in case the world unloaded and wiped the screens
-            local force = (tick % 2 == 1)
-            drawMonitorsIfChanged(force)
             tick = tick + 1
+            serverMark("flush tick=" .. tostring(tick))
+            flushMarks()
             updateTimer = os.startTimer(UPDATE_INTERVAL)
+        elseif event == "timer" and p1 == syncTimer then
+            rednet.broadcast({ request = "status" }, "bunker_status_request")
+            serverMark("sync request sent")
+            syncTimer = os.startTimer(STATUS_RESYNC_INTERVAL)
         elseif event == "timer" and p1 == lockTimer then
             if not locked then
                 lockConsole("idle " .. LOCK_AFTER_IDLE .. "s")
             end
-        elseif event == "monitor_touch" then
-            local monName = p1
-            if monName == ALARM_BUTTON_MONITOR then
-                setAlarm(not alarm)
-            else
-                local btns = buttons[monName]
-                if btns then
-                    local y = p3
-                    if gfxCaps[monName] then
-                        -- graphics mode reports pixel co-ordinates on touch
-                        y = math.floor(p3 / g.CELL_H) + 1
-                    end
-                    local btn = btns[y]
-                    if btn then
-                        if btn.id == "__ALARM__" then
-                            setAlarm(not alarm)
-                        else
-                            local status = statuses[btn.id]
-                            if status then
-                                local panel = MONITOR_PANELS[monName]
-                                local action = panel and bunkerlib.ACTIONS[btn.action or "light"]
-                                if action then
-                                    local msg = action(status, btn.id)
-                                    rednet.send(status.senderId, msg, "bunker_cmd")
-                                end
-                            end
-                        end
-                    end
-                end
-            end
         elseif event == "rednet_message" then
             local senderId, message, protocol = p1, p2, p3
             if protocol == "bunker_status" and type(message) == "table" and message.id then
-                bunkerlib.setStatus(statuses, message.id, senderId, message.state, message.cmd)
-                drawMonitorsIfChanged()
+                bunkerlib.setStatus(statuses, message.id, senderId, message.state, message.cmd, message.lock)
+                serverMark("status id=" .. tostring(message.id) .. " state=" .. tostring(message.state and 1 or 0) .. " from=" .. tostring(senderId))
+            elseif protocol == "bunker_alarm" and type(message) == "table" and type(message.on) == "boolean" then
+                -- Alarm state from another server instance (screen server or
+                -- another control server). Apply WITHOUT re-broadcasting.
+                if alarm ~= message.on then
+                    local src = tostring(message.source or senderId)
+                    serverMark("alarm sync " .. (message.on and "ON" or "OFF") .. " from " .. src)
+                    applyAlarm(message.on, src)
+                    flushMarks()
+                end
             end
         elseif event == "char" then
             if not locked then resetLockTimer() end
@@ -871,7 +613,13 @@ local function runControl()
             end
         end
 
-        bunkerlib.cleanStatuses(statuses, 10)
+        -- A deploy = fetch + reboot + boot, which can keep a client silent for
+        -- well over ten seconds. Using only 10s would briefly flash every
+        -- component OFFLINE during update waves; 25s absorbs those reboots
+        -- while still detecting a truly dead computer within half a minute.
+        -- STATUS_RESYNC_INTERVAL (15s) re-asks every client before this
+        -- window closes, so a missed regular heartbeat does not flap OFFLINE.
+        bunkerlib.cleanStatuses(statuses, 25)
     end
 end
 
@@ -888,5 +636,5 @@ else
     term.setTextColor(colors.white)
     print("Usage:")
     print("  setup     -> set password")
-    print("  start     -> start control room")
+    print("  start     -> start control server")
 end

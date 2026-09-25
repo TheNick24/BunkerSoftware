@@ -31,6 +31,7 @@ local DEVICES         = {
     { id = "me",            cmd = "light",       driver = "relay",    relay = "redstone_relay_7", side = "top" },
     { id = "me-corridor-1", cmd = "light",       driver = "relay",    relay = "redstone_relay_7", side = "right" },
     { id = "me-safety-1",   cmd = "safety-door", driver = "door",     peripheral = "redstone_relay_11", side = "front" },
+    { id = "me-safety-2",   cmd = "safety-door", driver = "door",     peripheral = "redstone_relay_15", side = "left" },
 }
 
 -- ============ START ============

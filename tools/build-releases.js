@@ -44,6 +44,7 @@ function fail(msg) {
 }
 
 function build() {
+  errors = 0;
   console.log("[build-releases] " + new Date().toISOString());
   const libs = listLua(LIB);
 
@@ -86,17 +87,21 @@ function build() {
   return errors === 0;
 }
 
-const ok = build();
-if (!ok) process.exitCode = 1;
+module.exports = { build };
 
-if (process.argv.includes("--watch")) {
-  const watched = [LIB, path.join(ROOT, "controlserver"), path.join(ROOT, "client"), path.join(ROOT, "remote"), ROLES_PATH];
-  console.log("[build-releases] watching sources for changes (Ctrl+C to stop)...");
-  const onEvent = (p) => {
-    try { build(); } catch (e) { errors++; console.error("  ! rebuild failed: " + e.message); }
-  };
-  for (const w of watched) {
-    fs.watch(w, { persistent: true }, onEvent);
+if (require.main === module) {
+  const ok = build();
+  if (!ok) process.exitCode = 1;
+
+  if (process.argv.includes("--watch")) {
+    const watched = [LIB, path.join(ROOT, "controlserver"), path.join(ROOT, "screenserver"), path.join(ROOT, "client"), path.join(ROOT, "remote"), ROLES_PATH];
+    console.log("[build-releases] watching sources for changes (Ctrl+C to stop)...");
+    const onEvent = (p) => {
+      try { build(); } catch (e) { errors++; console.error("  ! rebuild failed: " + e.message); }
+    };
+    for (const w of watched) {
+      fs.watch(w, { persistent: true }, onEvent);
+    }
+    setInterval(() => {}, 60000);
   }
-  setInterval(() => {}, 60000);
 }
