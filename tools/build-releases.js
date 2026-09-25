@@ -94,7 +94,7 @@ if (require.main === module) {
   if (!ok) process.exitCode = 1;
 
   if (process.argv.includes("--watch")) {
-    const watched = [LIB, path.join(ROOT, "controlserver"), path.join(ROOT, "client"), path.join(ROOT, "remote"), ROLES_PATH];
+    const watched = [LIB, path.join(ROOT, "controlserver"), path.join(ROOT, "screenserver"), path.join(ROOT, "client"), path.join(ROOT, "remote"), ROLES_PATH];
     console.log("[build-releases] watching sources for changes (Ctrl+C to stop)...");
     const onEvent = (p) => {
       try { build(); } catch (e) { errors++; console.error("  ! rebuild failed: " + e.message); }

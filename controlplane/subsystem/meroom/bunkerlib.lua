@@ -36,6 +36,8 @@ load("drivers")   -- relayGet/Set, DRIVERS (relay, redstone), driver()
 load("actions")   -- ACTIONS (light)
 load("doors")     -- door controllers: DRIVERS.door + DRIVERS["safety-door"],
                   --                  ACTIONS.door + ACTIONS["safety-door"]
+load("alarmconfig") -- shared static lists: rooms, aux, doors, alarmSirens,
+                  --                     safetyDoors, lockableDoors
 load("gearshift") -- sequenced gearshift doors: bunkerlib.gearshift.create()
 load("monitor")   -- drawHeader, drawInfoPlaceholder, drawFooter,
                   -- drawToggleTable, drawPanel

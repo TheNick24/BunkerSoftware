@@ -33,7 +33,9 @@ local ALL_FILES = {
     "lib/energy.lua",
     "lib/client.lua",
     "lib/alarmin.lua",
+    "lib/alarmconfig.lua",
 "controlserver/startup.lua",
+    "screenserver/startup.lua",
     "client/entrance/startup.lua",
     "client/meroom/startup.lua",
     "client/distributor1/startup.lua",
@@ -67,12 +69,14 @@ local CLIENT_SHARED = {
     { rel = "lib/gfx.lua",       dest = "gfx.lua" },
     { rel = "lib/energy.lua",    dest = "energy.lua" },
     { rel = "lib/client.lua",    dest = "client.lua" },
-    { rel = "lib/alarmin.lua",   dest = "alarmin.lua" },
+    { rel = "lib/alarmin.lua", dest = "alarmin.lua" },
+    { rel = "lib/alarmconfig.lua", dest = "alarmconfig.lua" },
 }
 
 -- Role -> main program path (mirrors ROLES in deploy/startup.lua).
 local CLIENT_ROLES = {
     controlserver = "controlserver/startup.lua",
+    screenserver = "screenserver/startup.lua",
     control     = "client/control/startup.lua",
     entrance    = "client/entrance/startup.lua",
     meroom      = "client/meroom/startup.lua",

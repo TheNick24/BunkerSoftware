@@ -14,7 +14,9 @@ Custom operating system / control system for a bunker network in ComputerCraft.
 - `lib/monitor.lua` - Monitor rendering (headers, toggle tables, panels, footer)
 - `lib/client.lua` - Room client runtime (`runClient`)
 - `lib/alarmin.lua` - Redstone alarm-input polling (`bunkerlib.alarmin.create`) for wired panic/trigger inputs
-- `controlserver/startup.lua` - ControlServer software (control room computer with the monitor panels)
+- `lib/alarmconfig.lua` - Shared static device lists (`rooms`, `aux`, `doors`, `alarmSirens`, `safetyDoors`, `lockableDoors`) used by control server + screen servers
+- `controlserver/startup.lua` - Control Server software (console + alarm + status cache, NO monitors) - multi-instance capable (backup consoles stay in sync)
+- `screenserver/startup.lua` - Screen Server software (monitor panels + touch + alarm banner) - multi-instance capable, per-instance panel selection via `/screenserver_panels.lua`
 - `client/entrance/startup.lua` - Room client (Entrance) - device control, rednet status
 - `client/meroom/startup.lua` - Room client (ME-Core) - device control, rednet status
 - `client/control/startup.lua` - Door keypad + client on the separate **Control** computer (door devices + keypad/inside monitors + Mekanism alarm siren on `redstone_relay_9`/back)
@@ -26,7 +28,9 @@ Custom operating system / control system for a bunker network in ComputerCraft.
 
 ## Requirements
 
-- Control room: computer + touchscreen monitor + wireless modem
+- Control server: computer + wireless modem (console/alarm; no monitors)
+- Screen server: computer + touchscreen monitors + wireless modem
+  (any number of screen servers, each with its own monitor set)
 - Room computers: computer + wireless modem + connected devices (redstone relay, redstone output, ...)
 - Wireless modems on all sides within range of each other
 
@@ -52,7 +56,8 @@ A **device** is just { `id`, `cmd`, `driver`, ... }. Two independent concepts:
   Add a new door type here, nothing else changes.
 
 Patch protocol: clients broadcast `{ id, cmd, state }` on `bunker_status`;
-the control (or any remote) sends `{ room, cmd, state }` on `bunker_cmd`.
+any server (control or screen) sends `{ room, cmd, state }` on `bunker_cmd`.
+Servers sync among themselves on `bunker_alarm` (`{ on, source }`).
 
 ## Alarm (Mekanism Industrial Alarm / sirens)
 
@@ -76,10 +81,10 @@ the sirens.
   relay = "redstone_relay_9", side = "back" },
 ```
 
-3. Control server (`controlserver/startup.lua`) — same id in the group:
+3. Shared list (`lib/alarmconfig.lua`) — same id in the group:
 
 ```lua
-local alarmSirens = {
+bunkerlib.alarmSirens = {
     { id = "alarm-siren", name = "Mekanism Alarm" },
 }
 ```
@@ -87,10 +92,17 @@ local alarmSirens = {
 When the alarm goes ON, the client gets `{ room = id, cmd = "alarm",
 state = true }` and switches the relay. Alarm OFF cuts power again.
 
+The alarm state itself syncs across ALL server instances: whoever triggers
+it (a screen server's touch button or a control server's `alarm on`)
+broadcasts `bunker_alarm { on, source }`; every other instance applies the
+same doors/sirens locally without re-broadcasting (no loops). Multiple
+screen servers and multiple control servers therefore always agree.
+
 ### Adding another alarm block later
 
 1. New relay/side (or another computer + its own device row)
-2. New unique `id` in **both** lists (`DEVICES` + `alarmSirens`)
+2. New unique `id` in **both** lists (`DEVICES` + `alarmSirens` in
+   `lib/alarmconfig.lua`)
 3. Deploy — all sirens in the group fire together with the alarm
 
 The group is shown as the `ALARM` section on `monitor_3` (same toggle as
@@ -104,33 +116,62 @@ the big button).
 > `monitor.lua`, `client.lua`). `bunkerlib.lua` is a loader that binds them
 > together; all MAMDANI programs load it via `require`.
 
-### Control room
+### Control server + screen server
 
-1. Copy `controlserver/startup.lua` as `startup.lua` to the control room computer
-2. Copy `lib/bunkerlib.lua` as `bunkerlib.lua` into the same folder
-3. Adjust the config:
-   - `rooms` table (room device IDs + names)
-   - `aux` table for special devices (e.g. corridor lamps) - NOT part of a room
-- `MONITOR_PANELS` assigns each monitor a device group - one entry per
-      device list (`rooms`, `aux`, `doors`, `safetyDoors`, ...). A single
-      monitor can show several groups via `sections`:
-      ```
-      local MONITOR_PANELS = {
-          ["monitor_4"] = { title = "ROOM LIGHTS",     action = "light", header = "LIGHT", entries = rooms },
-          ["monitor_7"] = { title = "CORRIDOR LIGHTS", action = "light", header = "LIGHT", entries = aux   },
-          ["monitor_3"] = { title = "DOORS", sections = {
-              { title = "DOOR",         action = "door",        onText = "OPEN", offText = "CLOSED", entries = doors },
-              { title = "SAFETY DOORS", action = "safety-door", onText = "OPEN", offText = "CLOSED", entries = safetyDoors },
-          } },
-      }
-      ```
-      `action` must match the client `cmd`. `header` is the state column
-      title. Monitors not listed show an info placeholder. New devices only
-      need an entry in a list + one row here.
-4. Start the program. On the first start (no password yet) it prompts
+The old all-in-one control room program is split into two roles (both may
+run multiple instances in parallel - they sync via `bunker_status` for
+device states and `bunker_alarm` for the alarm on/off state):
+
+1. **Control server** (`controlserver/startup.lua`): terminal console,
+   password, alarm logic, status cache. NO monitors.
+2. **Screen server** (`screenserver/startup.lua`): discovers the monitors
+   attached to ITS computer, draws the panels, forwards touch presses,
+   shows the `!! ALARM !!` banner. No console.
+
+Shared static device lists live in `lib/alarmconfig.lua` (`rooms`, `aux`,
+`doors`, `alarmSirens`, `safetyDoors`, `lockableDoors`) so every server
+instance works from the same source.
+
+#### Screen server setup
+
+1. Copy `screenserver/startup.lua` as `startup.lua` to the screen server
+   computer (with the monitor peripherals attached)
+2. Copy the whole `lib/` bundle next to it (flat)
+3. Optional per-instance panels: create `/screenserver_panels.lua` at the
+   computer root (survives deploys):
+
+   ```lua
+   -- show only a subset of the default panels:
+   return { only = { "monitor_4", "monitor_14" } }
+
+   -- or replace the panels entirely:
+   return {
+     panels = {
+       ["monitor_4"] = { title = "ROOM LIGHTS", action = "light",
+                         header = "LIGHT", entries = {
+           { id = "entrance", name = "Entrance" },
+       } },
+     },
+     alarmButton = "monitor_14",   -- or false to disable
+     energyMonitor = "monitor_18", -- or false to disable
+   }
+   ```
+
+   Without an override file the defaults are used (identical to the old
+   all-in-one `MONITOR_PANELS`). Monitors not present on this computer are
+   skipped automatically - a second control room with a different monitor
+   set just works.
+4. Start the program (autostarts on deployed systems).
+
+#### Control server setup
+
+1. Copy `controlserver/startup.lua` as `startup.lua` to the control server
+   computer
+2. Copy the whole `lib/` bundle next to it (flat)
+3. Start the program. On the first start (no password yet) it prompts
    **directly inside the running system** for a new password (min. 6
    characters) - after that the console boots locked. To change the
-   password later, run `control setup` (deployed clients: `main setup`).
+   password later, run `main setup`.
 
 ### Room clients
 
@@ -161,8 +202,9 @@ Passwords / PINs are stored as a **salted, stretched PBKDF2-HMAC-SHA256**
 hash (random 16-byte salt, 1000 iterations) with the format
 `pbkdf2$<salt>$<iterations>$<key>` - stored in `bunker.hash` (control room)
 or `door.hash` (door keypad). Old installations with a plain SHA-256 hash
-still verify, but re-running the password setup (`control setup` / `main
-setup` on deployed clients) rewrites the hash in the new format. The salt makes identical secrets produce different
+still verify, but re-running the password setup (`main setup` on deployed
+control server clients) rewrites the hash in the new format. The salt makes
+identical secrets produce different
 stored values and defeats rainbow tables; the iteration count slows brute
 force down.
 
@@ -172,27 +214,34 @@ ComputerCraft computer directory of the world save:
 `saves/<world>/computercraft/computer/<id>/bunker.hash`.
 
 Changing the password requires the **current password**:
-run `control setup` in the control room (deployed clients: `main setup`).
+run `main setup` on the control server.
 
 ## Control room usage
 
-- Monitor: tap the `[CLICK]` buttons to switch the devices
-- Only monitors listed in `MONITOR_PANELS` with entries are interactive
-- Terminal console (type commands directly and press Enter):
+**Screen server (monitors):**
+
+- Tap the `[CLICK]` buttons to switch the devices
+- Only monitors listed in the panels (default `MONITOR_PANELS` or the
+  `/screenserver_panels.lua` override) with entries are interactive
+- While an alarm is active every monitor shows a red `!! ALARM !!` banner.
+  The dedicated `monitor_14` shows a big tappable `ALARM` button instead;
+  tap it to start/stop the emergency.
+- The sirens themselves are driven by a room client (device `alarm-siren` on
+  `redstone_relay_9` / `back`, see **Alarm** above) - both server roles only
+  switch the shared alarm state.
+
+**Control server (terminal console):**
+
+- Type commands directly and press Enter:
   - `<id> on|off|toggle` - set/flick a device (e.g. `me-safety-1 on`)
   - `alarm` / `alarm on` - EMERGENCY: closes every safety door at once
   - `alarm off` - reopens all safety doors (ends the emergency)
   - `list` - show all known device states
   - `help`, `exit`
-  While an alarm is active every monitor shows a red `!! ALARM !!` banner.
-  The dedicated `monitor_14` shows a big tappable `ALARM` button instead;
-  tap it to start/stop the emergency without the terminal.
-  The control room powers a **Mekanism Industrial Alarm** (or any redstone
-  alarm block) while the alarm is ON: device `alarm-siren` on
-  `redstone_relay_9` / `back`. Add more sirens to `alarmSirens` +
-  `DEVICES`. See **Alarm (Mekanism Industrial Alarm / sirens)** above.
-  The control room learns each device's `cmd` type from the status broadcasts,
+- The console learns each device's `cmd` type from the status broadcasts,
   so the console works for lights, doors and safety doors alike.
+- Alarm started on ANY server instance (console or touch) syncs to every
+  other control/screen server instance via `bunker_alarm`.
 
 ### Door semantics
 
@@ -244,9 +293,10 @@ only used to *trigger* the refresh, the data never travels over wireless.
 
 1. **Bootstrap once per computer** with the room role:
    `wget run <BASE_URL>/tools/install.lua client entrance`
-   (roles: `controlserver`, `control`, `entrance`, `meroom`, `distributor`,
-   `maschineroom`). It installs the flat library bundle, the room's `main.lua`,
-   a `receiver.lua`, a generated `startup.lua` launcher and an `update.lua`.
+   (roles: `controlserver`, `screenserver`, `control`, `entrance`, `meroom`,
+   `distributor`, `maschineroom`). It installs the flat library bundle, the
+   room's `main.lua`, a `receiver.lua`, a generated `startup.lua` launcher and
+   an `update.lua`.
 2. Reboot the computer.
 3. The launcher now pulls the newest files over HTTP on **every boot** and then
    starts `main.lua` (a failed pull never blocks the room, old files stay).
@@ -325,11 +375,13 @@ API to be enabled in the CC config.
 
 ## Add a new device type
 
-1. Control: add the device to a list (`rooms`, `aux`, `doors`, `safetyDoors`, ...)
-   + one row in `MONITOR_PANELS` (or a section on an existing panel)
-2. Client: add the device to `DEVICES` with a matching `cmd`
-3. New transport (how it is driven): add a driver in `bunkerlib.DRIVERS`
-4. New behavior (what a button does): add an action in `bunkerlib.ACTIONS`
+1. Shared lists: add the device to a list in `lib/alarmconfig.lua`
+   (`rooms`, `aux`, `doors`, `safetyDoors`, ...)
+2. Screen server: one row in the panels (default `MONITOR_PANELS` in
+   `screenserver/startup.lua`, or the instance's `/screenserver_panels.lua`)
+3. Client: add the device to `DEVICES` with a matching `cmd`
+4. New transport (how it is driven): add a driver in `bunkerlib.DRIVERS`
+5. New behavior (what a button does): add an action in `bunkerlib.ACTIONS`
    and adjust the panel's `action` / device's `cmd`
 
 ## Controlplane (operator API + web UI + agents)
@@ -350,7 +402,8 @@ bootstraps from `GET /agentd.lua`, registers and then long-polls
 - `tools/build-releases.js` (`npm run build`) - builds the `subsystem` bundles
   from `tools/roles.json`; a deploy publishes `releases/<id>/` + `manifest.json`
 - `tools/install.lua` + `deploy/` - legacy MAMDANI bootstrap/deploy for the
-  CC network (roles: `controlserver`, `control`, `entrance`, `meroom`)
+  CC network (roles: `controlserver`, `screenserver`, `control`, `entrance`,
+  `meroom`, `distributor`, `maschineroom`)
 - `public/` - the operator web UI (device list, commands, release deploy)
 
 Commands (all require `agent.update` to be running the matching `agentd.lua`):

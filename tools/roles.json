@@ -2,6 +2,7 @@
   "comment": "Single source of truth for release roles. Mirror of the ROLES table in deploy/startup.lua (legacy push toolchain). dest: file name inside the role release folder; main: whether the agent launcher should auto-run it (computeMain finds subsystem/<role>/main.lua).",
   "roles": {
     "controlserver": { "src": "controlserver/startup.lua", "dest": "main.lua", "main": true },
+    "screenserver": { "src": "screenserver/startup.lua", "dest": "main.lua", "main": true },
     "entrance": { "src": "client/entrance/startup.lua", "dest": "main.lua", "main": true },
     "meroom": { "src": "client/meroom/startup.lua", "dest": "main.lua", "main": true },
     "maschineroom": { "src": "client/energyroom/startup.lua", "dest": "main.lua", "main": true },

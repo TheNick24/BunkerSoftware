@@ -50,7 +50,7 @@ local DEVICES = {
     { id = "control",            cmd = "light", driver = "relay",    relay = "redstone_relay_9",  side = "top" },
     { id = "control-corridor-1", cmd = "light", driver = "relay",    relay = "redstone_relay_9",  side = "right" },
     -- Mekanism Industrial Alarm (or any alarm block): powered ON with the alarm.
-    -- Extra sirens: add a row here + the same id in alarmSirens (controlserver).
+    -- Extra sirens: add a row here + the same id in alarmSirens (lib/alarmconfig.lua).
     { id = "alarm-siren", cmd = "alarm", driver = "relay",
       relay = "redstone_relay_9", side = "back" },
     { id = "Control Door 1",     cmd = "door",  driver = "door",  peripheral = "redstone_relay_10", side = "left" },
