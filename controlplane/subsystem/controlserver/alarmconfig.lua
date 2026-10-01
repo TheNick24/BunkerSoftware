@@ -13,6 +13,7 @@ return function(bunkerlib)
         { id = "me",       name = "ME-Core" },
         { id = "control",  name = "Control-Room" },
         { id = "maschine-room", name = "Maschine Room" },
+        { id = "hex",           name = "Hex 1" },
     }
 
     bunkerlib.aux = {

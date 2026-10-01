@@ -19,6 +19,7 @@ Custom operating system / control system for a bunker network in ComputerCraft.
 - `screenserver/startup.lua` - Screen Server software (monitor panels + touch + alarm banner) - multi-instance capable, per-instance panel selection via `/screenserver_panels.lua`
 - `client/entrance/startup.lua` - Room client (Entrance) - device control, rednet status
 - `client/meroom/startup.lua` - Room client (ME-Core) - device control, rednet status
+- `client/hex1/startup.lua` - Room client (Hex 1) - light on `redstone_relay_16`/back
 - `client/control/startup.lua` - Door keypad + client on the separate **Control** computer (door devices + keypad/inside monitors + Mekanism alarm siren on `redstone_relay_9`/back)
 - `client/distributor1/startup.lua` - Room client (Distributor_1) - device control, rednet status
 - `remote/startup.lua` - Remote CLI (e.g. pocket computer) - list/control devices from the shell
@@ -294,7 +295,7 @@ only used to *trigger* the refresh, the data never travels over wireless.
 1. **Bootstrap once per computer** with the room role:
    `wget run <BASE_URL>/tools/install.lua client entrance`
    (roles: `controlserver`, `screenserver`, `control`, `entrance`, `meroom`,
-   `distributor`, `maschineroom`). It installs the flat library bundle, the
+   `hex1`, `distributor`, `maschineroom`). It installs the flat library bundle, the
    room's `main.lua`, a `receiver.lua`, a generated `startup.lua` launcher and
    an `update.lua`.
 2. Reboot the computer.
@@ -403,7 +404,7 @@ bootstraps from `GET /agentd.lua`, registers and then long-polls
   from `tools/roles.json`; a deploy publishes `releases/<id>/` + `manifest.json`
 - `tools/install.lua` + `deploy/` - legacy MAMDANI bootstrap/deploy for the
   CC network (roles: `controlserver`, `screenserver`, `control`, `entrance`,
-  `meroom`, `distributor`, `maschineroom`)
+  `meroom`, `hex1`, `distributor`, `maschineroom`)
 - `public/` - the operator web UI (device list, commands, release deploy)
 
 Commands (all require `agent.update` to be running the matching `agentd.lua`):

@@ -38,6 +38,7 @@ local ALL_FILES = {
     "screenserver/startup.lua",
     "client/entrance/startup.lua",
     "client/meroom/startup.lua",
+    "client/hex1/startup.lua",
     "client/distributor1/startup.lua",
     "client/energyroom/startup.lua",
     "client/control/startup.lua",
@@ -80,6 +81,7 @@ local CLIENT_ROLES = {
     control     = "client/control/startup.lua",
     entrance    = "client/entrance/startup.lua",
     meroom      = "client/meroom/startup.lua",
+    hex1        = "client/hex1/startup.lua",
     distributor = "client/distributor1/startup.lua",
     maschineroom = "client/energyroom/startup.lua",
 }

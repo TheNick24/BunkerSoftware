@@ -54,6 +54,7 @@ local ROLES = {
     screenserver  = { src = "screenserver/startup.lua",           dest = "main.lua", launcher = true },
     entrance    = { src = "client/entrance/startup.lua",    dest = "main.lua", launcher = true },
     meroom      = { src = "client/meroom/startup.lua", dest = "main.lua", launcher = true },
+    hex1        = { src = "client/hex1/startup.lua",   dest = "main.lua", launcher = true },
     maschineroom = { src = "client/energyroom/startup.lua", dest = "main.lua", launcher = true },
     distributor = { src = "client/distributor1/startup.lua", dest = "main.lua", launcher = true },
     -- Control = the separate door-keypad computer (NOT ControlRoom). The
@@ -74,6 +75,7 @@ local TARGETS = {
     [27] = "meroom",      -- ME-Core room client
     [25] = "maschineroom",   -- Maschine Room client
     [24] = "distributor",    -- Distributor_1 room client
+    [44] = "hex1",           -- Hex 1 room client
     [23] = "remote",         -- pocket computer (remote CLI)
 }
 
